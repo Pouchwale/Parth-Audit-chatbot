@@ -63,7 +63,9 @@ export default function SignInScreen() {
               label="Password"
               value={password}
               onChangeText={setPassword}
-              secureTextEntry
+              secret
+              autoCapitalize="none"
+              autoCorrect={false}
               autoComplete="current-password"
               textContentType="password"
               returnKeyType="go"

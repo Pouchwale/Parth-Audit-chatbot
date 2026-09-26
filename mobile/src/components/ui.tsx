@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { ComponentProps, ReactNode } from 'react';
+import { useState, type ComponentProps, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
 import { Radius, Spacing, useTheme } from '@/constants/theme';
 
@@ -56,16 +56,32 @@ export function IconButton({ icon, label, onPress, color }: { icon: IconName; la
   );
 }
 
-export function Field({ label, ...input }: TextInputProps & { label: string }) {
+/** A labelled text input. `secret` hides the text and adds an eye button to show it. */
+export function Field({ label, secret, ...input }: TextInputProps & { label: string; secret?: boolean }) {
   const theme = useTheme();
+  const [revealed, setRevealed] = useState(false);
   return (
     <View style={styles.field}>
       <Text style={[styles.fieldLabel, { color: theme.textSecondary }]}>{label}</Text>
-      <TextInput
-        placeholderTextColor={theme.textSecondary}
-        {...input}
-        style={[styles.fieldInput, { color: theme.text, backgroundColor: theme.surface, borderColor: theme.border }]}
-      />
+      <View style={[styles.fieldBox, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+        <TextInput
+          placeholderTextColor={theme.textSecondary}
+          {...input}
+          secureTextEntry={secret ? !revealed : input.secureTextEntry}
+          accessibilityLabel={label}
+          style={[styles.fieldInput, { color: theme.text }]}
+        />
+        {secret ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={revealed ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+            onPress={() => setRevealed(!revealed)}
+            hitSlop={8}
+            style={styles.eye}>
+            <Ionicons name={revealed ? 'eye-off-outline' : 'eye-outline'} size={22} color={theme.textSecondary} />
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -121,13 +137,9 @@ const styles = StyleSheet.create({
   iconButton: { width: 40, height: 40, borderRadius: Radius.pill, alignItems: 'center', justifyContent: 'center' },
   field: { gap: Spacing.xs },
   fieldLabel: { fontSize: 13, fontWeight: '600' },
-  fieldInput: {
-    minHeight: 48,
-    borderWidth: 1,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-    fontSize: 16,
-  },
+  fieldBox: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: Radius.md },
+  fieldInput: { flex: 1, minHeight: 48, paddingHorizontal: Spacing.md, fontSize: 16 },
+  eye: { width: 44, height: 48, alignItems: 'center', justifyContent: 'center' },
   chip: { alignSelf: 'flex-start', paddingHorizontal: Spacing.sm, paddingVertical: 2, borderRadius: Radius.pill },
   chipText: { fontSize: 12, fontWeight: '600' },
   card: { borderWidth: 1, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.sm },

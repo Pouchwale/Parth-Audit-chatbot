@@ -10,7 +10,10 @@ import { startServer } from './server.ts';
 process.env.CREDENTIALS_KEY ||= randomBytes(32).toString('base64');
 const config = loadConfig();
 const app = await startServer(
-  { ...config, databaseUrl: 'memory://', superAdmins: new Set([...config.superAdmins, 'admin']) },
+  // Any web origin, so the app works whether it's opened at localhost, 127.0.0.1 or this computer's network address.
+  { ...config, databaseUrl: 'memory://', superAdmins: new Set([...config.superAdmins, 'admin']), corsOrigins: ['*'] },
   createRegistry([createDemoConnector()], 'demo'),
+  // Keep the terminal quiet: only warnings and errors, not a line per request.
+  { logLevel: 'warn' },
 );
 app.log.warn('DEMO MODE: sample data; sign in as demo/demo, or admin/admin for the Accounts view. Data resets on restart.');

@@ -21,7 +21,8 @@ export async function buildApp(deps: AppDeps, options: { logger?: FastifyServerO
   const app = Fastify({ logger: options.logger ?? true, trustProxy: deps.config.trustProxy });
   app.decorateRequest('auth', null);
 
-  await app.register(cors, { origin: deps.config.corsOrigins });
+  // "*" allows any web origin. Safe enough here because requests carry a bearer token, not cookies.
+  await app.register(cors, { origin: deps.config.corsOrigins.includes('*') ? true : deps.config.corsOrigins });
   await app.register(rateLimit, { global: false });
 
   app.setErrorHandler((error, request, reply) => {

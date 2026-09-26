@@ -9,8 +9,28 @@ import type {
   MessageRequest,
   SignInInfo,
 } from '@shared/api';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 
-const BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
+const DEV_SERVER_PORT = 3000;
+
+/**
+ * EXPO_PUBLIC_API_URL when set (production builds). In development the server runs on the same
+ * computer as Expo, so use that computer's address: the page's host on web, and the address the
+ * phone loaded the app from on Expo Go or a development build.
+ */
+function serverUrl(): string {
+  const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    return `${window.location.protocol}//${window.location.hostname}:${DEV_SERVER_PORT}`;
+  }
+  const host = Constants.expoConfig?.hostUri?.split(':')[0];
+  return `http://${host || 'localhost'}:${DEV_SERVER_PORT}`;
+}
+
+export const SERVER_URL = serverUrl();
+const BASE_URL = SERVER_URL;
 
 export class ApiError extends Error {
   readonly status: number;
@@ -37,7 +57,11 @@ async function request<T>(path: string, options: { method?: 'GET' | 'POST'; body
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
   } catch {
-    throw new ApiError(0, 'network', "Can't reach the assistant server. Check your connection and try again.");
+    throw new ApiError(
+      0,
+      'network',
+      `Can't reach the assistant server at ${BASE_URL}. Make sure it's running and this device is on the same network, then try again.`,
+    );
   }
   if (response.status === 204) return undefined as T;
   const data = await response.json().catch(() => null);

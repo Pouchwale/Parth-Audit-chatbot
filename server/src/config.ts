@@ -14,7 +14,7 @@ const Env = z.object({
   GROQ_REASONING_EFFORT: z.enum(['', 'low', 'medium', 'high']).default('medium'),
   DCRS_BASE_URL: z.url().optional(),
   TRUST_PROXY: z.string().optional(),
-  CORS_ORIGINS: z.string().default('http://localhost:8081'),
+  CORS_ORIGINS: z.string().default('http://localhost:8081,http://127.0.0.1:8081'),
 });
 
 export interface Config {

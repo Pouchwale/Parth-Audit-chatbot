@@ -6,9 +6,12 @@ import { openDatabase } from './db/index.ts';
 import { startMaintenance } from './maintenance.ts';
 
 /** Opens the database, starts the API and shuts both down cleanly on Ctrl+C. */
-export async function startServer(config: Config, registry: Registry) {
+export async function startServer(config: Config, registry: Registry, options: { logLevel?: 'info' | 'warn' } = {}) {
   const database = await openDatabase(config.databaseUrl);
-  const app = await buildApp({ config, db: database.db, registry, model: groqModel(config) });
+  const app = await buildApp(
+    { config, db: database.db, registry, model: groqModel(config) },
+    { logger: { level: options.logLevel ?? 'info' } },
+  );
   const stopMaintenance = startMaintenance(database.db, config, app.log);
 
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
