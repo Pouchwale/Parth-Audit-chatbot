@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+
+# Secrets — only the .example files are committed
+.env
+.env.*
+!.env.example
+
+# Local embedded database used in development
+server/.data/
