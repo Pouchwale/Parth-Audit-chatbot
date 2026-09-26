@@ -29,53 +29,47 @@ Every action is logged, including proposed changes that were cancelled.
 | `server/` | Node + TypeScript API: sessions, login and action logs, connectors, agent |
 | `shared/api.ts` | The HTTP contract, as types shared by the app and the server |
 
-## Running it locally
+## Run and check it
 
-You need Node 24 or later.
+You need Node 24 or later, and a Groq API key in `server/.env` (`GROQ_API_KEY=...`; see `server/.env.example`). Run every command from the project folder.
 
-### Server
+| Command | What it does |
+|---|---|
+| `npm run setup` | Installs the server's and the app's packages. Run it once, and again after pulling changes. |
+| `npm test` | Runs the backend tests. |
+| `npm run typecheck` | Type-checks the server and the app. |
+| `npm run demo` | Starts the server with sample data instead of DCRS. Keep it running. |
+| `npm run app` | Starts the app and opens it in your browser at http://localhost:8081. Run it in a second terminal. |
+| `npm run server` | Starts the server against the real DCRS (once the DCRS connector is set up). |
 
-```bash
-cd server
-npm install
-cp .env.example .env
-```
+**Trying it in demo mode:** run `npm run demo` in one terminal and `npm run app` in another, then:
 
-Fill in `server/.env`:
+1. Sign in as `demo` with password `demo`.
+2. Ask "What findings are still open?". The assistant looks them up straight away.
+3. Say or type "Close F-101, the pallets were moved". A confirmation card shows exactly what will change, and nothing happens until you tap **Confirm** or say "confirm".
+4. Sign out, then sign in as `admin` with password `admin`. The people icon at the top opens the super admin view: each account, the devices it's signed in on, and what it last did.
+
+Voice input in the browser needs Chrome. Demo data resets when the server restarts. Press Ctrl+C in a terminal to stop that process.
+
+### Real mode
+
+Fill in `server/.env` (copy it from `server/.env.example`):
 
 - `CREDENTIALS_KEY`: generate one with the command given in the file.
 - `SUPER_ADMINS`: DCRS usernames that can open the super admin view.
 - `GROQ_API_KEY`: create one at https://console.groq.com/keys.
 - `DCRS_BASE_URL`: the DCRS API's base URL.
 
-Then start the server:
+Then run `npm run server`. In development the server uses an embedded Postgres (PGlite) stored in `server/.data/`, so no database setup is needed. In production, set `DATABASE_URL` to a Postgres connection string. Migrations run automatically when the server starts.
 
-```bash
-npm run dev
-```
+### On a phone
 
-In development the server uses an embedded Postgres (PGlite) stored in `server/.data/`, so no database setup is needed. In production, set `DATABASE_URL` to a Postgres connection string. Migrations run automatically when the server starts.
+Copy `mobile/.env.example` to `mobile/.env.local` and set `EXPO_PUBLIC_API_URL` to your computer's address on the same Wi-Fi, for example `http://192.168.1.20:3000`.
 
-### App
-
-```bash
-cd mobile
-npm install
-cp .env.example .env.local
-```
-
-Set `EXPO_PUBLIC_API_URL` in `mobile/.env.local` to the server address as the phone sees it. On the same Wi-Fi, that's your computer's LAN IP, for example `http://192.168.1.20:3000`.
-
-- **Browser (quickest check):** run `npm run web` inside `mobile/`. Voice input works in Chrome.
-- **Phone with voice:** speech recognition needs a development build, because Expo Go doesn't include it. Run `npx expo run:android` (needs Android Studio), or build in the cloud with EAS (`npx eas build --profile development`), which works without a Mac for iOS too.
-- **Expo Go:** the app runs text-only. Replies are still read aloud.
+- **Expo Go:** run `npm --prefix mobile start` and scan the QR code. The app runs text-only there, and replies are still read aloud.
+- **With voice:** speech recognition needs a development build, because Expo Go doesn't include it. Run `npx expo run:android` inside `mobile/` (needs Android Studio), or build in the cloud with EAS (`npx eas build --profile development`), which also works for iOS without a Mac.
 
 ### Tests
-
-```bash
-cd server
-npm test
-```
 
 The tests run the real server against an in-memory database, a fake connected system and a scripted model. They cover sign-in logging, sessions, the confirmation rules (nothing runs until confirmed, and a confirmed change runs exactly once), and the super admin view.
 
@@ -110,5 +104,5 @@ The agent runs on Groq using `openai/gpt-oss-120b` with `medium` reasoning effor
 
 ## Status
 
-- Done: the server, logging, super admin view, agent with confirmations, and the mobile app. These are tested against a fake connected system.
-- Waiting on details: the DCRS connector. Its sign-in and its list of allowed actions will be built from the real DCRS API once the base URL and a test account are available. Until then, signing in returns "Couldn't reach Digital Controlled Record System".
+- Done: the server, logging, super admin view, agent with confirmations, and the mobile app. Try them with `npm run demo`.
+- Waiting on details: the DCRS connector. Its sign-in and its list of allowed actions will be built from the real DCRS API once the base URL and a test account are available. Until then, `npm run server` can't sign anyone in.

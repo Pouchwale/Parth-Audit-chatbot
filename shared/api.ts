@@ -23,6 +23,11 @@ export interface CurrentUser {
   role: Role;
 }
 
+/** Which system people sign in with, e.g. "Digital Controlled Record System". */
+export interface SignInInfo {
+  system: string;
+}
+
 export interface LoginRequest {
   username: string;
   password: string;

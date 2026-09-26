@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "node --watch --env-file-if-exists=.env src/index.ts",
     "start": "node --env-file-if-exists=.env src/index.ts",
+    "demo": "node --env-file-if-exists=.env src/demo.ts",
     "typecheck": "tsc",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate"

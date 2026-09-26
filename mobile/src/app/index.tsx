@@ -262,8 +262,8 @@ function EmptyState({ voice }: { voice: boolean }) {
       </View>
       <Text style={[styles.emptyTitle, { color: theme.text }]}>What do you need done?</Text>
       <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-        {voice ? 'Tap the microphone and say it, or type it below.' : 'Type your request below.'} I can look things up in the Digital
-        Controlled Record System and make changes for you. I always ask before changing anything.
+        {voice ? 'Tap the microphone and say it, or type it below.' : 'Type your request below.'} I can look things up and make changes
+        in your connected systems. I always ask before changing anything.
       </Text>
     </View>
   );

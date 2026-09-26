@@ -1,7 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { DeviceInfo, LoginRequest, LoginResponse } from '@shared/api.ts';
+import type { DeviceInfo, LoginRequest, LoginResponse, SignInInfo } from '@shared/api.ts';
 import type { AppDeps } from '../app.ts';
 import { ConnectorError, type ConnectorAccount } from '../connectors/types.ts';
 import { one } from '../db/index.ts';
@@ -28,6 +28,8 @@ const LoginBody = z.object({
 export function registerAuthRoutes(app: FastifyInstance, deps: AppDeps) {
   const session = requireSession(deps);
   const connector = deps.registry.signIn;
+
+  app.get('/auth/provider', async (): Promise<SignInInfo> => ({ system: connector.name }));
 
   app.post('/auth/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request) => {
     const body = parseBody(LoginBody, request.body);

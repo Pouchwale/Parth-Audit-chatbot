@@ -1,10 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Field, Notice } from '@/components/ui';
 import { Radius, Spacing, useTheme } from '@/constants/theme';
-import { errorMessage } from '@/lib/api';
+import { api, errorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 
 export default function SignInScreen() {
@@ -14,6 +14,14 @@ export default function SignInScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [system, setSystem] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .signInInfo()
+      .then((info) => setSystem(info.system))
+      .catch(() => undefined);
+  }, []);
 
   async function submit() {
     if (!username.trim() || !password || busy) return;
@@ -37,7 +45,7 @@ export default function SignInScreen() {
             </View>
             <Text style={[styles.title, { color: theme.text }]}>Audit Assistant</Text>
             <Text style={[styles.lead, { color: theme.textSecondary }]}>
-              Sign in with your Digital Controlled Record System account.
+              {system ? `Sign in with your ${system} account.` : 'Sign in with your work account.'}
             </Text>
 
             {notice ? <Notice>{notice}</Notice> : null}

@@ -1,0 +1,12 @@
+{
+  "name": "audit-assistant",
+  "private": true,
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix mobile install",
+    "test": "npm --prefix server test",
+    "typecheck": "npm --prefix server run typecheck && npm --prefix mobile run typecheck",
+    "demo": "npm --prefix server run demo",
+    "server": "npm --prefix server run dev",
+    "app": "npm --prefix mobile run web"
+  }
+}

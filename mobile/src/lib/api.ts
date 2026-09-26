@@ -7,6 +7,7 @@ import type {
   LoginRequest,
   LoginResponse,
   MessageRequest,
+  SignInInfo,
 } from '@shared/api';
 
 const BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
@@ -47,7 +48,8 @@ async function request<T>(path: string, options: { method?: 'GET' | 'POST'; body
 }
 
 export const api = {
-  login: (body: LoginRequest) => request<LoginResponse>('/auth/login', { method: 'POST', body }),
+  signInInfo: () => request<SignInInfo>('/auth/provider'),
+  login:(body: LoginRequest) => request<LoginResponse>('/auth/login', { method: 'POST', body }),
   logout: (token: string) => request<void>('/auth/logout', { method: 'POST', token }),
   me: (token: string) => request<{ user: CurrentUser }>('/me', { token }),
   send: (token: string, body: MessageRequest) => request<AssistantReply>('/assistant/messages', { method: 'POST', body, token }),
