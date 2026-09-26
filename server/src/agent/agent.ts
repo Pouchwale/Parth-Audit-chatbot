@@ -55,7 +55,11 @@ interface WorkingConversation {
 export async function sendMessage(turn: Turn, conversationId: string | undefined, text: string): Promise<TurnResult> {
   return withConversation(turn, conversationId, async (conv) => {
     const content: ContentParam[] = [];
-    if (conv.pending) {
+    if (conv.pending?.claimed) {
+      // A confirmed run was interrupted (e.g. a restart). Report what actually happened.
+      content.push(...(await settleInterrupted(turn, conv.pending)));
+      conv.pending = null;
+    } else if (conv.pending) {
       // The person moved on without answering, so the waiting changes are dropped.
       content.push(...(await dropPending(turn, conv.pending, 'superseded')));
       conv.pending = null;
@@ -75,13 +79,13 @@ export async function decide(
 ): Promise<TurnResult> {
   return withConversation(turn, conversationId, async (conv) => {
     const pending = conv.pending;
-    if (!pending || pending.id !== confirmationId) {
+    if (!pending || pending.id !== confirmationId || pending.claimed) {
       throw new HttpError(409, 'confirmation_not_pending', 'That change was already handled.');
     }
-    conv.pending = null;
 
     if (decision === 'cancel' || Date.parse(pending.expiresAt) <= Date.now()) {
       const why = decision === 'cancel' ? 'cancelled' : 'expired';
+      conv.pending = null;
       conv.messages.push({ role: 'user', content: await dropPending(turn, pending, why) });
       return {
         reply:
@@ -91,6 +95,11 @@ export async function decide(
         confirmation: null,
       };
     }
+
+    // Claimed and saved before anything runs: if this request dies part-way, the confirmation can't be
+    // answered again, and the next message reports what actually happened (see settleInterrupted).
+    pending.claimed = true;
+    await conv.save();
 
     const results = [...pending.results];
     const outcomes: string[] = [];
@@ -105,6 +114,7 @@ export async function decide(
       outcomes.push(run.ok ? `Done: ${call.summary}.` : `Couldn't ${lowerFirst(call.summary)}: ${run.error}`);
       if (!run.ok) stop = run.signedOut ? 'signed_out' : 'failed';
     }
+    conv.pending = null;
     conv.messages.push({ role: 'user', content: results });
     // Saved before asking the model to report back, so a model failure can never run these changes twice.
     await conv.save();
@@ -306,6 +316,24 @@ const DROPPED = {
 async function dropPending(turn: Turn, pending: PendingConfirmation, why: keyof typeof DROPPED): Promise<ToolResult[]> {
   const results = [...pending.results];
   for (const call of pending.calls) results.push(await skip(turn, call, DROPPED[why]));
+  return results;
+}
+
+/** Results for confirmed calls whose run was interrupted, taken from the action log. */
+async function settleInterrupted(turn: Turn, pending: PendingConfirmation): Promise<ToolResult[]> {
+  const results = [...pending.results];
+  for (const call of pending.calls) {
+    const [row] = await turn.deps.db.select().from(actions).where(eq(actions.id, call.actionId));
+    if (row?.status === 'succeeded') {
+      results.push({ type: 'tool_result', tool_use_id: call.toolUseId, content: 'This change was made.' });
+    } else if (row?.status === 'failed' || row?.status === 'cancelled') {
+      results.push(toolError(call.toolUseId, row.error ?? 'This change was not made.'));
+    } else {
+      const unknown = 'The run was interrupted, so it is not known whether this change was made. Check the system before trying again.';
+      await finish(turn, call.actionId, 'failed', unknown);
+      results.push(toolError(call.toolUseId, unknown));
+    }
+  }
   return results;
 }
 

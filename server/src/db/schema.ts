@@ -95,6 +95,8 @@ export interface PendingConfirmation {
   expiresAt: string;
   /** What the person said that led to these changes. */
   request: string;
+  /** Set when the person confirmed, before anything runs, so the calls can never run twice. */
+  claimed?: boolean;
   // Results for the other tool calls in the same assistant turn; the API needs them all in one message.
   results: Anthropic.Beta.BetaToolResultBlockParam[];
   calls: PendingCall[];

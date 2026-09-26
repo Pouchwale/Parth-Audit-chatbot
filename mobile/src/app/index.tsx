@@ -17,9 +17,25 @@ interface ChatMessage {
   text: string;
 }
 
-// Answers to a waiting confirmation, spoken or typed. Anything else is treated as a new request.
-const YES = /^\s*(yes|yeah|yep|yup|confirm(ed)?|go ahead|do it|ok(ay)?|sure|proceed)\b/i;
-const NO = /^\s*(no|nope|cancel|stop|don'?t|do not|never ?mind)\b/i;
+const YES = /^(yes|yeah|yep|yup|ok|okay|sure|confirm|confirmed|go ahead|do it|proceed)( (yes|yeah|ok|okay|sure|confirm|go ahead|do it|proceed))*$/;
+const NO = /^(no|nope|cancel|stop|don't|do not|never mind|nevermind)( (no|cancel|stop|don't|do not|never mind))*$/;
+
+/**
+ * Reads a spoken or typed answer to a waiting confirmation. Only a short, plain yes or no counts:
+ * "okay, close item 13 instead" is a new request, which drops the waiting change.
+ */
+function answerTo(text: string): 'confirm' | 'cancel' | null {
+  const words = text
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/[^a-z' ]+/g, ' ')
+    .split(' ')
+    .filter((word) => word && !['please', 'thanks', 'thank', 'you'].includes(word))
+    .join(' ');
+  if (YES.test(words)) return 'confirm';
+  if (NO.test(words)) return 'cancel';
+  return null;
+}
 
 // After a long pause, start a fresh conversation so old context doesn't leak into a new request.
 const IDLE_MS = 30 * 60_000;
@@ -70,8 +86,8 @@ export default function AssistantScreen() {
     const request = text.trim();
     if (!request || busy) return;
     setDraft('');
-    if (confirmation && YES.test(request)) return decide('confirm', request);
-    if (confirmation && NO.test(request)) return decide('cancel', request);
+    const answer = confirmation ? answerTo(request) : null;
+    if (answer) return decide(answer, request);
 
     add('user', request);
     setConfirmation(null);

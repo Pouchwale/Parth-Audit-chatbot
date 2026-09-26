@@ -53,12 +53,13 @@ export function useVoiceInput(handlers: VoiceInputHandlers) {
   });
 
   const module = recognition?.ExpoSpeechRecognitionModule;
-  let available = false;
-  try {
-    available = module?.isRecognitionAvailable() ?? false;
-  } catch {
-    available = false;
-  }
+  const [available] = useState(() => {
+    try {
+      return module?.isRecognitionAvailable() ?? false;
+    } catch {
+      return false;
+    }
+  });
 
   async function start() {
     if (!module) return;

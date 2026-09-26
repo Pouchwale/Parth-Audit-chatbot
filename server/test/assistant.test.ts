@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import type { AssistantReply } from '@shared/api.ts';
-import { actions, sessions } from '../src/db/schema.ts';
+import { actions, conversations, sessions } from '../src/db/schema.ts';
 import { callsTool, fails, says, setup } from './helpers.ts';
 
 let t: Awaited<ReturnType<typeof setup>>;
@@ -168,6 +168,26 @@ it('still reports a confirmed change when the model is unavailable afterwards', 
   expect(response.json<AssistantReply>().reply).toBe('Done: Close item 12 with the note "done".');
   expect((await answer(alice, proposed, 'confirm')).statusCode).toBe(409);
   expect(t.system.calls).toHaveLength(1);
+});
+
+it('reports what happened after an interrupted confirmed run, and never runs it again', async () => {
+  const alice = await t.signIn('alice');
+  t.model.queue(callsTool('fake__close_item', { id: '12', note: 'done' }));
+  const proposed = (await ask(alice, 'Close item 12')).json<AssistantReply>();
+
+  // As if the server restarted after the change ran but before the conversation was saved.
+  const [conv] = await t.db.select().from(conversations);
+  await t.db.update(conversations).set({ pending: { ...conv!.pending!, claimed: true } });
+  await t.db.update(actions).set({ status: 'succeeded' });
+
+  expect((await answer(alice, proposed, 'confirm')).statusCode).toBe(409);
+  t.model.queue(says('Item 12 was closed.'));
+  await ask(alice, 'Did that work?', proposed.conversationId);
+  expect(t.model.requests[1]!.messages.at(-1)!.content).toMatchObject([
+    { type: 'tool_result', content: 'This change was made.' },
+    { type: 'text', text: 'Did that work?' },
+  ]);
+  expect(t.system.calls).toEqual([]);
 });
 
 it('signs the person out when the connected system stops accepting their sign-in', async () => {
