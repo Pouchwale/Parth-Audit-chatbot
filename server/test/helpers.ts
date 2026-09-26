@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import type Anthropic from '@anthropic-ai/sdk';
 import { sql } from 'drizzle-orm';
+import type Groq from 'groq-sdk';
 import { z } from 'zod';
 import type { DeviceInfo, LoginResponse } from '@shared/api.ts';
 import type { Model, ModelRequest } from '../src/agent/model.ts';
@@ -20,9 +20,9 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     sessionTtlMs: 30 * 24 * 3600_000,
     confirmationTtlMs: 10 * 60_000,
     conversationRetentionMs: 24 * 3600_000,
+    groqApiKey: undefined,
     model: 'test-model',
-    effort: '',
-    fallbacks: '',
+    reasoningEffort: '',
     dcrsBaseUrl: undefined,
     trustProxy: false,
     corsOrigins: [],
@@ -91,10 +91,10 @@ export function fakeSystem() {
   return { connector, items, calls, state };
 }
 
-type Step = (request: ModelRequest) => Anthropic.Beta.BetaMessage;
+type Step = (request: ModelRequest) => Groq.Chat.ChatCompletion;
 let nextId = 0;
 
-/** Stands in for Claude: returns queued responses in order and records every request. */
+/** Stands in for the model: returns queued responses in order and records every request. */
 export function scriptedModel() {
   const requests: ModelRequest[] = [];
   const steps: Step[] = [];
@@ -108,14 +108,18 @@ export function scriptedModel() {
 }
 
 export function says(text: string): Step {
-  return () => modelMessage([{ type: 'text', text, citations: null }], 'end_turn');
+  return () => completion({ role: 'assistant', content: text }, 'stop');
 }
 
 export function callsTool(name: string, input: Record<string, unknown>, text?: string): Step {
   return () =>
-    modelMessage(
-      [...(text ? [{ type: 'text', text, citations: null }] : []), { type: 'tool_use', id: `toolu_${++nextId}`, name, input }],
-      'tool_use',
+    completion(
+      {
+        role: 'assistant',
+        content: text ?? null,
+        tool_calls: [{ id: `call_${++nextId}`, type: 'function', function: { name, arguments: JSON.stringify(input) } }],
+      },
+      'tool_calls',
     );
 }
 
@@ -125,17 +129,14 @@ export function fails(error: Error): Step {
   };
 }
 
-function modelMessage(content: unknown[], stopReason: string): Anthropic.Beta.BetaMessage {
+function completion(message: Groq.Chat.ChatCompletionMessage, finishReason: 'stop' | 'tool_calls'): Groq.Chat.ChatCompletion {
   return {
-    id: `msg_${++nextId}`,
-    type: 'message',
-    role: 'assistant',
+    id: `chatcmpl_${++nextId}`,
+    object: 'chat.completion',
+    created: 0,
     model: 'test-model',
-    content,
-    stop_reason: stopReason,
-    stop_sequence: null,
-    usage: { input_tokens: 1, output_tokens: 1 },
-  } as unknown as Anthropic.Beta.BetaMessage;
+    choices: [{ index: 0, message, finish_reason: finishReason, logprobs: null }],
+  } as Groq.Chat.ChatCompletion;
 }
 
 export interface LoginOptions {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import Anthropic from '@anthropic-ai/sdk';
 import { and, eq, isNull, lt, or } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
+import Groq from 'groq-sdk';
 import { z } from 'zod';
 import type { ActionStatus, AssistantReply, Confirmation } from '@shared/api.ts';
 import type { AppDeps } from '../app.ts';
@@ -11,12 +11,8 @@ import { ConnectorError } from '../connectors/types.ts';
 import { one } from '../db/index.ts';
 import { actions, conversations, type PendingCall, type PendingConfirmation } from '../db/schema.ts';
 import { HttpError } from '../http.ts';
-import type { ModelRequest } from './model.ts';
+import { isFailedToolCall, ModelNotConfigured, type Message, type ModelRequest, type Tool, type ToolMessage } from './model.ts';
 import { systemPrompt } from './prompt.ts';
-
-type MessageParam = Anthropic.Beta.BetaMessageParam;
-type ContentParam = Anthropic.Beta.BetaContentBlockParam;
-type ToolResult = Anthropic.Beta.BetaToolResultBlockParam;
 
 const MAX_MODEL_CALLS = 8;
 const MAX_RESULT_CHARS = 60_000;
@@ -46,7 +42,7 @@ interface Outcome {
 
 interface WorkingConversation {
   id: string;
-  messages: MessageParam[];
+  messages: Message[];
   pending: PendingConfirmation | null;
   save(): Promise<void>;
 }
@@ -54,18 +50,15 @@ interface WorkingConversation {
 /** Handles something the person said or typed. */
 export async function sendMessage(turn: Turn, conversationId: string | undefined, text: string): Promise<TurnResult> {
   return withConversation(turn, conversationId, async (conv) => {
-    const content: ContentParam[] = [];
     if (conv.pending?.claimed) {
       // A confirmed run was interrupted (e.g. a restart). Report what actually happened.
-      content.push(...(await settleInterrupted(turn, conv.pending)));
-      conv.pending = null;
+      conv.messages.push(...(await settleInterrupted(turn, conv.pending)));
     } else if (conv.pending) {
       // The person moved on without answering, so the waiting changes are dropped.
-      content.push(...(await dropPending(turn, conv.pending, 'superseded')));
-      conv.pending = null;
+      conv.messages.push(...(await dropPending(turn, conv.pending, 'superseded')));
     }
-    content.push({ type: 'text', text });
-    conv.messages.push({ role: 'user', content });
+    conv.pending = null;
+    conv.messages.push({ role: 'user', content: text });
     return runModel(turn, conv, text);
   });
 }
@@ -86,7 +79,7 @@ export async function decide(
     if (decision === 'cancel' || Date.parse(pending.expiresAt) <= Date.now()) {
       const why = decision === 'cancel' ? 'cancelled' : 'expired';
       conv.pending = null;
-      conv.messages.push({ role: 'user', content: await dropPending(turn, pending, why) });
+      conv.messages.push(...(await dropPending(turn, pending, why)));
       return {
         reply:
           why === 'cancelled'
@@ -109,13 +102,13 @@ export async function decide(
         results.push(await skip(turn, call, 'Not done, because an earlier change in this request failed.'));
         continue;
       }
-      const run = await execute(turn, call.toolName, call.input, call.toolUseId, call.actionId);
+      const run = await execute(turn, call.toolName, call.input, call.toolCallId, call.actionId);
       results.push(run.result);
       outcomes.push(run.ok ? `Done: ${call.summary}.` : `Couldn't ${lowerFirst(call.summary)}: ${run.error}`);
       if (!run.ok) stop = run.signedOut ? 'signed_out' : 'failed';
     }
     conv.pending = null;
-    conv.messages.push({ role: 'user', content: results });
+    conv.messages.push(...results);
     // Saved before asking the model to report back, so a model failure can never run these changes twice.
     await conv.save();
 
@@ -141,59 +134,63 @@ async function runModel(turn: Turn, conv: WorkingConversation, request: string):
   const tools = toolDefinitions(deps.registry);
 
   for (let calls = 0; calls < MAX_MODEL_CALLS; calls++) {
-    const message = await callModel(turn, { system, tools, messages: conv.messages });
-    if (message.stop_reason === 'refusal') {
-      turn.log.warn({ stopDetails: message.stop_details }, 'model declined the request');
-      return { reply: "Sorry, I can't help with that request.", confirmation: null };
-    }
-    if (message.stop_reason === 'max_tokens') {
-      // A tool input may be cut off, so nothing runs and the partial turn is dropped.
-      turn.log.warn('model hit max_tokens');
+    const completion = await callModel(turn, { system, tools, messages: conv.messages });
+    const choice = completion.choices[0];
+    if (!choice || choice.finish_reason === 'length') {
+      // A tool call may be cut off, so nothing runs and the partial turn is dropped.
+      turn.log.warn({ finishReason: choice?.finish_reason }, 'model response was incomplete');
       return { reply: "Sorry, I couldn't work that out. Could you say it more simply?", confirmation: null };
     }
-    // A fallback block only marks where a fallback model took over; the history doesn't need it.
-    const content = message.content.filter((block) => block.type !== 'fallback');
-    conv.messages.push({ role: 'assistant', content });
-    const text = content
-      .flatMap((block) => (block.type === 'text' ? [block.text] : []))
-      .join(' ')
-      .trim();
-    const toolUses = content.filter((block) => block.type === 'tool_use');
-    if (toolUses.length === 0) return { reply: text, confirmation: null };
+    const { content, tool_calls: toolCalls = [], reasoning } = choice.message;
+    conv.messages.push({
+      role: 'assistant',
+      content: content ?? '',
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      ...(reasoning ? { reasoning } : {}),
+    });
+    const text = content?.trim() ?? '';
+    if (toolCalls.length === 0) return { reply: text, confirmation: null };
 
-    const results: ToolResult[] = [];
+    const results: ToolMessage[] = [];
     const proposed: PendingCall[] = [];
     let signedOut = false;
-    for (const use of toolUses) {
-      const binding = deps.registry.find(use.name);
+    for (const call of toolCalls) {
+      const binding = deps.registry.find(call.function.name);
       if (!binding) {
-        results.push(toolError(use.id, `There is no tool called ${use.name}.`));
+        results.push(toolError(call.id, `There is no tool called ${call.function.name}.`));
         continue;
       }
-      const parsed = binding.action.input.safeParse(use.input);
+      let args: unknown;
+      try {
+        args = JSON.parse(call.function.arguments || '{}');
+      } catch {
+        results.push(toolError(call.id, 'The arguments were not valid JSON.'));
+        continue;
+      }
+      const parsed = binding.action.input.safeParse(args);
       if (!parsed.success) {
-        results.push(toolError(use.id, `Invalid input:\n${z.prettifyError(parsed.error)}`));
+        results.push(toolError(call.id, `Invalid input:\n${z.prettifyError(parsed.error)}`));
         continue;
       }
       if (signedOut) {
-        results.push(toolError(use.id, SIGNED_OUT));
+        results.push(toolError(call.id, SIGNED_OUT));
         continue;
       }
       const summary = describe(binding, parsed.data);
       if (binding.action.kind === 'write') {
         const actionId = await logAction(turn, conv.id, binding, parsed.data, summary, 'awaiting_confirmation', request);
-        proposed.push({ toolUseId: use.id, toolName: use.name, input: parsed.data, actionId, system: binding.connector.name, summary });
+        proposed.push({ toolCallId: call.id, toolName: binding.toolName, input: parsed.data, actionId, system: binding.connector.name, summary });
         continue;
       }
       const actionId = await logAction(turn, conv.id, binding, parsed.data, summary, 'running', request);
-      const run = await execute(turn, use.name, parsed.data, use.id, actionId);
+      const run = await execute(turn, binding.toolName, parsed.data, call.id, actionId);
       results.push(run.result);
       signedOut ||= run.signedOut;
     }
 
     if (signedOut) {
       for (const call of proposed) results.push(await skip(turn, call, SIGNED_OUT));
-      conv.messages.push({ role: 'user', content: results });
+      conv.messages.push(...results);
       return { reply: '', confirmation: null, signedOut: true };
     }
     if (proposed.length > 0) {
@@ -204,44 +201,50 @@ async function runModel(turn: Turn, conv: WorkingConversation, request: string):
         confirmation: { id: conv.pending.id, expiresAt, changes: proposed.map(({ system, summary }) => ({ system, summary })) },
       };
     }
-    conv.messages.push({ role: 'user', content: results });
+    conv.messages.push(...results);
   }
   return { reply: "Sorry, I couldn't finish that. Could you try it in smaller steps?", confirmation: null };
 }
 
 const SIGNED_OUT = 'Not run: the sign-in to the connected system has expired.';
 
-async function callModel(turn: Turn, request: ModelRequest): Promise<Anthropic.Beta.BetaMessage> {
+async function callModel(turn: Turn, request: ModelRequest): Promise<Groq.Chat.ChatCompletion> {
   try {
     return await turn.deps.model(request);
   } catch (error) {
-    if (!(error instanceof Anthropic.AnthropicError)) throw error;
-    turn.log.error({ err: error }, 'model call failed');
-    if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) {
-      throw new HttpError(503, 'assistant_not_configured', "The assistant isn't set up correctly. Ask an administrator to check its API key.");
+    if (error instanceof ModelNotConfigured) {
+      throw new HttpError(503, 'assistant_not_configured', "The assistant isn't set up yet. Ask an administrator to add its Groq API key.");
     }
-    if (error instanceof Anthropic.RateLimitError) {
+    if (!(error instanceof Groq.GroqError)) throw error;
+    turn.log.error({ err: error }, 'model call failed');
+    if (error instanceof Groq.AuthenticationError || error instanceof Groq.PermissionDeniedError) {
+      throw new HttpError(503, 'assistant_not_configured', "The assistant isn't set up correctly. Ask an administrator to check its Groq API key.");
+    }
+    if (error instanceof Groq.RateLimitError) {
       throw new HttpError(503, 'assistant_busy', 'The assistant is busy right now. Try again in a minute.');
+    }
+    if (isFailedToolCall(error)) {
+      throw new HttpError(422, 'not_understood', "Sorry, I couldn't work that out. Could you say it another way?");
     }
     throw new HttpError(503, 'assistant_unavailable', 'The assistant is unavailable right now. Try again in a moment.');
   }
 }
 
 interface RunResult {
-  result: ToolResult;
+  result: ToolMessage;
   ok: boolean;
   signedOut: boolean;
   error?: string;
 }
 
-async function execute(turn: Turn, toolName: string, input: unknown, toolUseId: string, actionId: string): Promise<RunResult> {
+async function execute(turn: Turn, toolName: string, input: unknown, toolCallId: string, actionId: string): Promise<RunResult> {
   const { deps } = turn;
   const binding = deps.registry.find(toolName);
   const parsed = binding?.action.input.safeParse(input);
   if (!binding || !parsed?.success) {
     const message = 'This action is no longer available.';
     await finish(turn, actionId, 'failed', message);
-    return { ok: false, signedOut: false, error: message, result: toolError(toolUseId, message) };
+    return { ok: false, signedOut: false, error: message, result: toolError(toolCallId, message) };
   }
 
   await deps.db.update(actions).set({ status: 'running' }).where(eq(actions.id, actionId));
@@ -252,12 +255,12 @@ async function execute(turn: Turn, toolName: string, input: unknown, toolUseId: 
     await finish(turn, actionId, 'succeeded', null);
 
     const json = JSON.stringify(output ?? null);
-    if (json.length <= MAX_RESULT_CHARS) return { ok: true, signedOut: false, result: { type: 'tool_result', tool_use_id: toolUseId, content: json } };
+    if (json.length <= MAX_RESULT_CHARS) return { ok: true, signedOut: false, result: toolResult(toolCallId, json) };
     const tooLarge =
       binding.action.kind === 'write'
         ? 'The change was made, but the response was too large to include.'
         : `The result was too large to read (${json.length} characters). Ask for fewer records or narrow the search.`;
-    return { ok: true, signedOut: false, result: toolError(toolUseId, tooLarge) };
+    return { ok: true, signedOut: false, result: toolError(toolCallId, tooLarge) };
   } catch (error) {
     const known = error instanceof ConnectorError ? error : undefined;
     if (!known) turn.log.error({ err: error, tool: toolName }, 'connector action failed unexpectedly');
@@ -265,7 +268,7 @@ async function execute(turn: Turn, toolName: string, input: unknown, toolUseId: 
     await finish(turn, actionId, 'failed', message);
     // Losing the sign-in connector's session means the person has to sign in again.
     const signedOut = known?.kind === 'unauthorized' && binding.connector.id === deps.registry.signIn.id;
-    return { ok: false, signedOut, error: message, result: toolError(toolUseId, message) };
+    return { ok: false, signedOut, error: message, result: toolError(toolCallId, message) };
   }
 }
 
@@ -302,9 +305,9 @@ async function finish(turn: Turn, actionId: string, status: ActionStatus, error:
   await turn.deps.db.update(actions).set({ status, error, finishedAt: new Date() }).where(eq(actions.id, actionId));
 }
 
-async function skip(turn: Turn, call: PendingCall, reason: string): Promise<ToolResult> {
+async function skip(turn: Turn, call: PendingCall, reason: string): Promise<ToolMessage> {
   await finish(turn, call.actionId, 'cancelled', reason);
-  return toolError(call.toolUseId, reason);
+  return toolError(call.toolCallId, reason);
 }
 
 const DROPPED = {
@@ -313,25 +316,25 @@ const DROPPED = {
   superseded: 'The person moved on without confirming, so this change was not made.',
 };
 
-async function dropPending(turn: Turn, pending: PendingConfirmation, why: keyof typeof DROPPED): Promise<ToolResult[]> {
+async function dropPending(turn: Turn, pending: PendingConfirmation, why: keyof typeof DROPPED): Promise<ToolMessage[]> {
   const results = [...pending.results];
   for (const call of pending.calls) results.push(await skip(turn, call, DROPPED[why]));
   return results;
 }
 
 /** Results for confirmed calls whose run was interrupted, taken from the action log. */
-async function settleInterrupted(turn: Turn, pending: PendingConfirmation): Promise<ToolResult[]> {
+async function settleInterrupted(turn: Turn, pending: PendingConfirmation): Promise<ToolMessage[]> {
   const results = [...pending.results];
   for (const call of pending.calls) {
     const [row] = await turn.deps.db.select().from(actions).where(eq(actions.id, call.actionId));
     if (row?.status === 'succeeded') {
-      results.push({ type: 'tool_result', tool_use_id: call.toolUseId, content: 'This change was made.' });
+      results.push(toolResult(call.toolCallId, 'This change was made.'));
     } else if (row?.status === 'failed' || row?.status === 'cancelled') {
-      results.push(toolError(call.toolUseId, row.error ?? 'This change was not made.'));
+      results.push(toolError(call.toolCallId, row.error ?? 'This change was not made.'));
     } else {
       const unknown = 'The run was interrupted, so it is not known whether this change was made. Check the system before trying again.';
       await finish(turn, call.actionId, 'failed', unknown);
-      results.push(toolError(call.toolUseId, unknown));
+      results.push(toolError(call.toolCallId, unknown));
     }
   }
   return results;
@@ -396,19 +399,22 @@ async function create(turn: Turn) {
   );
 }
 
-const toolCache = new WeakMap<Registry, Anthropic.Beta.BetaTool[]>();
+const toolCache = new WeakMap<Registry, Tool[]>();
 
-/** Tool definitions for the model, in registry order so the prompt prefix stays cacheable. */
-export function toolDefinitions(registry: Registry): Anthropic.Beta.BetaTool[] {
+/** Function definitions for the model: exactly the actions on the connector list, nothing else. */
+export function toolDefinitions(registry: Registry): Tool[] {
   let tools = toolCache.get(registry);
   if (!tools) {
     tools = registry.bindings.map(({ toolName, action }) => {
-      const { $schema: _, ...schema } = z.toJSONSchema(action.input, { io: 'input' });
+      const { $schema: _, ...parameters } = z.toJSONSchema(action.input, { io: 'input' });
       return {
-        name: toolName,
-        description:
-          action.kind === 'write' ? `${action.description} This changes data, so the person confirms it before it runs.` : action.description,
-        input_schema: schema as Anthropic.Beta.BetaTool.InputSchema,
+        type: 'function',
+        function: {
+          name: toolName,
+          description:
+            action.kind === 'write' ? `${action.description} This changes data, so the person confirms it before it runs.` : action.description,
+          parameters,
+        },
       };
     });
     toolCache.set(registry, tools);
@@ -424,8 +430,12 @@ function describe(binding: ToolBinding, input: unknown): string {
   }
 }
 
-function toolError(toolUseId: string, message: string): ToolResult {
-  return { type: 'tool_result', tool_use_id: toolUseId, is_error: true, content: message };
+function toolResult(toolCallId: string, content: string): ToolMessage {
+  return { role: 'tool', tool_call_id: toolCallId, content };
+}
+
+function toolError(toolCallId: string, message: string): ToolMessage {
+  return { role: 'tool', tool_call_id: toolCallId, content: JSON.stringify({ error: message }) };
 }
 
 function lowerFirst(text: string): string {

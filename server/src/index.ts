@@ -1,4 +1,4 @@
-import { claudeModel } from './agent/model.ts';
+import { groqModel } from './agent/model.ts';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
 import { connectors, SIGN_IN_CONNECTOR } from './connectors/index.ts';
@@ -9,7 +9,7 @@ import { startMaintenance } from './maintenance.ts';
 const config = loadConfig();
 const database = await openDatabase(config.databaseUrl);
 const registry = createRegistry(connectors(config), SIGN_IN_CONNECTOR);
-const app = await buildApp({ config, db: database.db, registry, model: claudeModel(config) });
+const app = await buildApp({ config, db: database.db, registry, model: groqModel(config) });
 const stopMaintenance = startMaintenance(database.db, config, app.log);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

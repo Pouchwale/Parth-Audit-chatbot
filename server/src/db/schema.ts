@@ -1,5 +1,5 @@
-import type Anthropic from '@anthropic-ai/sdk';
 import { boolean, index, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import type { Message, ToolMessage } from '../agent/model.ts';
 import type { ActionStatus, DeviceInfo } from '@shared/api.ts';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
@@ -81,7 +81,7 @@ export const loginEvents = pgTable(
 );
 
 export interface PendingCall {
-  toolUseId: string;
+  toolCallId: string;
   toolName: string;
   input: unknown;
   actionId: string;
@@ -97,8 +97,9 @@ export interface PendingConfirmation {
   request: string;
   /** Set when the person confirmed, before anything runs, so the calls can never run twice. */
   claimed?: boolean;
-  // Results for the other tool calls in the same assistant turn; the API needs them all in one message.
-  results: Anthropic.Beta.BetaToolResultBlockParam[];
+  // Results for the other tool calls in the same assistant turn. Every tool call needs its result
+  // right after the assistant message, so these wait until the confirmation is answered.
+  results: ToolMessage[];
   calls: PendingCall[];
 }
 
@@ -111,7 +112,7 @@ export const conversations = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'set null' }),
-    messages: jsonb('messages').$type<Anthropic.Beta.BetaMessageParam[]>().notNull(),
+    messages: jsonb('messages').$type<Message[]>().notNull(),
     pending: jsonb('pending').$type<PendingConfirmation>(),
     lockedUntil: at('locked_until'),
     createdAt: at('created_at').notNull().defaultNow(),

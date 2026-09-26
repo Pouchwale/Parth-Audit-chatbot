@@ -1,7 +1,8 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { eq } from 'drizzle-orm';
+import Groq from 'groq-sdk';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import type { AssistantReply } from '@shared/api.ts';
+import { ModelNotConfigured } from '../src/agent/model.ts';
 import { actions, conversations, sessions } from '../src/db/schema.ts';
 import { callsTool, fails, says, setup } from './helpers.ts';
 
@@ -28,6 +29,13 @@ async function statuses() {
   return (await t.db.select({ status: actions.status }).from(actions)).map((row) => row.status);
 }
 
+/** The messages the model was given on its nth call. */
+function sentToModel(call: number) {
+  return t.model.requests[call]!.messages;
+}
+
+const error = (message: string) => JSON.stringify({ error: message });
+
 it('runs a lookup straight away and reports back', async () => {
   const alice = await t.signIn('alice');
   t.model.queue(callsTool('fake__list_items', { status: 'open' }), says('You have two open items.'));
@@ -40,7 +48,7 @@ it('runs a lookup straight away and reports back', async () => {
   expect(await t.db.select().from(actions)).toMatchObject([
     { action: 'list_items', kind: 'read', status: 'succeeded', summary: 'List open items', request: 'What is still open?' },
   ]);
-  expect(JSON.stringify(t.model.requests[1]!.messages.at(-1))).toContain('Fire exit blocked');
+  expect(sentToModel(1).at(-1)).toMatchObject({ role: 'tool', content: expect.stringContaining('Fire exit blocked') });
 });
 
 it('asks before changing anything, then runs exactly what was confirmed, once', async () => {
@@ -77,9 +85,9 @@ it('changes nothing when the person cancels, and tells the model so', async () =
 
   t.model.queue(says('Anything else?'));
   await ask(alice, 'Thanks', proposed.conversationId);
-  const history = t.model.requests[1]!.messages;
-  expect(history.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'user']);
-  expect(history[2]!.content).toMatchObject([{ type: 'tool_result', is_error: true }]);
+  const history = sentToModel(1);
+  expect(history.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'user']);
+  expect(history[2]).toMatchObject({ role: 'tool', content: error('The person cancelled this change, so it was not made.') });
 });
 
 it('drops a waiting change when the person moves on to something else', async () => {
@@ -89,9 +97,9 @@ it('drops a waiting change when the person moves on to something else', async ()
 
   t.model.queue(says('Okay.'));
   await ask(alice, 'Actually, never mind', proposed.conversationId);
-  expect(t.model.requests[1]!.messages.at(-1)!.content).toMatchObject([
-    { type: 'tool_result', is_error: true },
-    { type: 'text', text: 'Actually, never mind' },
+  expect(sentToModel(1).slice(-2)).toMatchObject([
+    { role: 'tool', content: error('The person moved on without confirming, so this change was not made.') },
+    { role: 'user', content: 'Actually, never mind' },
   ]);
   expect(t.system.calls).toEqual([]);
   expect(await statuses()).toEqual(['cancelled']);
@@ -118,7 +126,7 @@ it('sends invalid tool input back to the model instead of running it', async () 
 
   const response = (await ask(alice, 'Close it')).json<AssistantReply>();
   expect(response).toMatchObject({ reply: 'Which item did you mean?', confirmation: null });
-  expect(t.model.requests[1]!.messages.at(-1)!.content).toMatchObject([{ type: 'tool_result', is_error: true }]);
+  expect(sentToModel(1).at(-1)).toMatchObject({ role: 'tool', content: expect.stringContaining('Invalid input') });
   expect(await statuses()).toEqual([]);
 });
 
@@ -128,8 +136,8 @@ it('only offers and runs the actions on the connector list', async () => {
   const response = (await ask(alice, 'Delete everything')).json<AssistantReply>();
 
   expect(response.reply).toBe("I can't do that.");
-  expect(t.model.requests[0]!.tools.map((tool) => tool.name)).toEqual(['fake__list_items', 'fake__close_item']);
-  expect(t.model.requests[1]!.messages.at(-1)!.content).toMatchObject([{ type: 'tool_result', is_error: true }]);
+  expect(t.model.requests[0]!.tools.map((tool) => tool.function?.name)).toEqual(['fake__list_items', 'fake__close_item']);
+  expect(sentToModel(1).at(-1)).toMatchObject({ role: 'tool', content: error('There is no tool called fake__delete_everything.') });
   expect(t.system.calls).toEqual([]);
 });
 
@@ -152,9 +160,7 @@ it('reports a failed change and records why', async () => {
   const response = (await answer(alice, proposed, 'confirm')).json<AssistantReply>();
   expect(response.reply).toBe("Item 99 doesn't exist, so nothing was closed.");
   expect(await t.db.select().from(actions)).toMatchObject([{ status: 'failed', error: "Item 99 doesn't exist." }]);
-  expect(t.model.requests[1]!.messages.at(-1)!.content).toMatchObject([
-    { type: 'tool_result', is_error: true, content: "Item 99 doesn't exist." },
-  ]);
+  expect(sentToModel(1).at(-1)).toMatchObject({ role: 'tool', content: error("Item 99 doesn't exist.") });
 });
 
 it('still reports a confirmed change when the model is unavailable afterwards', async () => {
@@ -162,7 +168,7 @@ it('still reports a confirmed change when the model is unavailable afterwards', 
   t.model.queue(callsTool('fake__close_item', { id: '12', note: 'done' }));
   const proposed = (await ask(alice, 'Close item 12')).json<AssistantReply>();
 
-  t.model.queue(fails(new Anthropic.APIConnectionError({ message: 'network down' })));
+  t.model.queue(fails(new Groq.APIConnectionError({ message: 'network down' })));
   const response = await answer(alice, proposed, 'confirm');
   expect(response.statusCode).toBe(200);
   expect(response.json<AssistantReply>().reply).toBe('Done: Close item 12 with the note "done".');
@@ -183,11 +189,20 @@ it('reports what happened after an interrupted confirmed run, and never runs it 
   expect((await answer(alice, proposed, 'confirm')).statusCode).toBe(409);
   t.model.queue(says('Item 12 was closed.'));
   await ask(alice, 'Did that work?', proposed.conversationId);
-  expect(t.model.requests[1]!.messages.at(-1)!.content).toMatchObject([
-    { type: 'tool_result', content: 'This change was made.' },
-    { type: 'text', text: 'Did that work?' },
+  expect(sentToModel(1).slice(-2)).toMatchObject([
+    { role: 'tool', content: 'This change was made.' },
+    { role: 'user', content: 'Did that work?' },
   ]);
   expect(t.system.calls).toEqual([]);
+});
+
+it('explains when the assistant has no API key yet', async () => {
+  const alice = await t.signIn('alice');
+  t.model.queue(fails(new ModelNotConfigured('GROQ_API_KEY is not set')));
+
+  const response = await ask(alice, 'What is open?');
+  expect(response.statusCode).toBe(503);
+  expect(response.json()).toMatchObject({ error: 'assistant_not_configured' });
 });
 
 it('signs the person out when the connected system stops accepting their sign-in', async () => {

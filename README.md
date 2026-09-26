@@ -7,17 +7,17 @@ The first connected system is the Digital Controlled Record System (DCRS). The a
 ## How a request flows
 
 ```
-phone app ──► assistant server ──► Claude (decides which allowed action fits)
+phone app ──► assistant server ──► Groq model (decides which allowed action fits)
  (voice/text)        │
                      ├─► lookups run immediately
                      └─► changes are held ──► app shows the exact change ──► you confirm ──► runs once
 ```
 
 1. You speak (on-device speech-to-text) or type. The app sends the text to the server.
-2. The server gives Claude the request plus the connector's allowed actions as tools.
-3. **Read** actions run immediately, and Claude uses the results.
+2. The server gives the model the request plus the connector's allowed actions as tools.
+3. **Read** actions run immediately, and the model uses the results.
 4. **Write** actions never run straight away. The server stores the exact call and the app shows a confirmation card, which is also read aloud. The summary on the card is built by the server from the call's inputs, not written by the model.
-5. You confirm, either by tapping or by saying "confirm" or "cancel". The server then runs exactly the stored call, once, as you, and Claude tells you in plain language what happened.
+5. You confirm, either by tapping or by saying "confirm" or "cancel". The server then runs exactly the stored call, once, as you, and the model tells you in plain language what happened.
 
 Every action is logged, including proposed changes that were cancelled.
 
@@ -45,7 +45,7 @@ Fill in `server/.env`:
 
 - `CREDENTIALS_KEY`: generate one with the command given in the file.
 - `SUPER_ADMINS`: DCRS usernames that can open the super admin view.
-- `ANTHROPIC_API_KEY`: or sign in once with `ant auth login`.
+- `GROQ_API_KEY`: create one at https://console.groq.com/keys.
 - `DCRS_BASE_URL`: the DCRS API's base URL.
 
 Then start the server:
@@ -106,7 +106,7 @@ Behind a reverse proxy, set `TRUST_PROXY` so the logs record the real client IP.
 
 ## Model
 
-The agent runs on Claude (`claude-opus-5` by default) with `medium` effort, which keeps voice replies quick. Server-side refusal fallback (`ANTHROPIC_FALLBACKS=default`) is on: if the model declines a request for policy reasons, the API retries it on Anthropic's recommended fallback model. Change these in `server/.env`.
+The agent runs on Groq using `openai/gpt-oss-120b` with `medium` reasoning effort and a low temperature, which Groq recommends for reliable tool calls. If Groq rejects a malformed tool call, the request is retried once. In testing each step took 0.5 to 1.3 seconds, which suits voice. Change the model or effort in `server/.env`. The key's other chat models are `openai/gpt-oss-20b` (faster) and `qwen/qwen3.8-27b` (preview).
 
 ## Status
 

@@ -9,9 +9,9 @@ const Env = z.object({
   SESSION_TTL_DAYS: z.coerce.number().positive().default(30),
   CONFIRMATION_TTL_MINUTES: z.coerce.number().positive().default(10),
   CONVERSATION_RETENTION_HOURS: z.coerce.number().positive().default(24),
-  ANTHROPIC_MODEL: z.string().default('claude-opus-5'),
-  ANTHROPIC_EFFORT: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']).default('medium'),
-  ANTHROPIC_FALLBACKS: z.enum(['', 'default']).default('default'),
+  GROQ_API_KEY: z.string().optional(),
+  GROQ_MODEL: z.string().default('openai/gpt-oss-120b'),
+  GROQ_REASONING_EFFORT: z.enum(['', 'low', 'medium', 'high']).default('medium'),
   DCRS_BASE_URL: z.url().optional(),
   TRUST_PROXY: z.string().optional(),
   CORS_ORIGINS: z.string().default('http://localhost:8081'),
@@ -29,9 +29,11 @@ export interface Config {
   sessionTtlMs: number;
   confirmationTtlMs: number;
   conversationRetentionMs: number;
+  /** Missing means the assistant can't answer yet; sign-in and the admin view still work. */
+  groqApiKey: string | undefined;
   model: string;
-  effort: '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-  fallbacks: '' | 'default';
+  /** For reasoning models such as gpt-oss. Empty sends nothing. */
+  reasoningEffort: '' | 'low' | 'medium' | 'high';
   dcrsBaseUrl: string | undefined;
   trustProxy: boolean | string[] | ((address: string, hop: number) => boolean);
   corsOrigins: string[];
@@ -39,7 +41,7 @@ export interface Config {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const blankToUndefined = Object.fromEntries(
-    Object.entries(env).map(([k, v]) => [k, v === '' && k !== 'ANTHROPIC_EFFORT' && k !== 'ANTHROPIC_FALLBACKS' ? undefined : v]),
+    Object.entries(env).map(([k, v]) => [k, v === '' && k !== 'GROQ_REASONING_EFFORT' ? undefined : v]),
   );
   const parsed = Env.safeParse(blankToUndefined);
   if (!parsed.success) throw new Error(`Invalid server configuration:\n${z.prettifyError(parsed.error)}`);
@@ -57,9 +59,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sessionTtlMs: e.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
     confirmationTtlMs: e.CONFIRMATION_TTL_MINUTES * 60 * 1000,
     conversationRetentionMs: e.CONVERSATION_RETENTION_HOURS * 60 * 60 * 1000,
-    model: e.ANTHROPIC_MODEL,
-    effort: e.ANTHROPIC_EFFORT,
-    fallbacks: e.ANTHROPIC_FALLBACKS,
+    groqApiKey: e.GROQ_API_KEY,
+    model: e.GROQ_MODEL,
+    reasoningEffort: e.GROQ_REASONING_EFFORT,
     dcrsBaseUrl: e.DCRS_BASE_URL,
     trustProxy: parseTrustProxy(e.TRUST_PROXY),
     corsOrigins: list(e.CORS_ORIGINS),
