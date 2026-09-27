@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import Groq from 'groq-sdk';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { AssistantMessage, AssistantReply, ConfirmationPart, ConversationDetail } from '@shared/api.ts';
 import { recoverAfterRestart } from '../src/agent/agent.ts';
 import { ModelNotConfigured } from '../src/agent/model.ts';
@@ -316,4 +316,52 @@ it('signs the person out when the connected system stops accepting their sign-in
   expect((await t.as(alice).get('/me')).statusCode).toBe(401);
   const [session] = await t.db.select().from(sessions).where(eq(sessions.endReason, 'upstream_signed_out'));
   expect(session).toBeDefined();
+});
+
+it('limits each person to 20 requests a minute across their devices, counting messages, decisions and retries together', async () => {
+  const phone = await t.signIn('alice');
+  const laptop = await t.signIn('alice', { device: { deviceId: 'alice-laptop' } });
+  const bob = await t.signIn('bob');
+  t.model.queue(...Array.from({ length: 21 }, () => says('Hello.')));
+
+  for (let i = 0; i < 10; i++) expect((await ask(phone, 'Hi')).statusCode).toBe(200);
+  for (let i = 0; i < 10; i++) expect((await ask(laptop, 'Hi')).statusCode).toBe(200);
+  const [conv] = await t.db.select().from(conversations).limit(1);
+  for (const limited of [
+    await ask(phone, 'Hi'),
+    await t.as(laptop).post(`/assistant/conversations/${conv!.id}/retry`, {}),
+    await t.as(laptop).post(`/assistant/conversations/${conv!.id}/decision`, { confirmationId: conv!.id, decision: 'confirm' }),
+  ]) {
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toMatchObject({ error: 'rate_limited' });
+  }
+  expect((await ask(bob, 'Hi')).statusCode).toBe(200);
+});
+
+it('works on at most three requests at once for each person', async () => {
+  const alice = await t.signIn('alice');
+  const bob = await t.signIn('bob');
+  let finishLookups = () => {};
+  t.system.state.lookupRunning = new Promise((resolve) => (finishLookups = resolve));
+  t.model.queue(...Array.from({ length: 3 }, () => callsTool('fake__list_items', {})));
+  const running = [ask(alice, 'One'), ask(alice, 'Two'), ask(alice, 'Three')];
+  await vi.waitFor(() => expect(t.system.calls).toHaveLength(3));
+
+  const fourth = await ask(alice, 'Four');
+  expect(fourth.statusCode).toBe(429);
+  expect(fourth.json()).toMatchObject({ error: 'too_many_running' });
+  // Refused before anything was saved.
+  expect(await t.db.$count(conversations)).toBe(3);
+  // A conversation that is already being worked on still says so.
+  const [busy] = await t.db.select().from(conversations).limit(1);
+  expect((await ask(alice, 'Again', busy!.id)).json()).toMatchObject({ error: 'conversation_busy' });
+
+  t.model.queue(says('Nothing is open.'));
+  expect((await ask(bob, 'What is open?')).statusCode).toBe(200);
+
+  t.model.queue(...Array.from({ length: 3 }, () => says('Two items are open.')));
+  finishLookups();
+  for (const response of await Promise.all(running)) expect(response.statusCode).toBe(200);
+  t.model.queue(says('Hello.'));
+  expect((await ask(alice, 'Four')).statusCode).toBe(200);
 });

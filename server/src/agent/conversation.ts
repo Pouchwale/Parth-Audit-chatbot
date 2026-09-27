@@ -1,11 +1,13 @@
-import { and, eq, isNotNull, isNull, lt, or } from 'drizzle-orm';
+import { and, eq, gte, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import type { ChatMessage } from '@shared/api.ts';
 import { one, type Db } from '../db/index.ts';
-import { conversations, type PendingConfirmation } from '../db/schema.ts';
+import { conversations, users, type PendingConfirmation } from '../db/schema.ts';
 import { HttpError } from '../http.ts';
 import type { Message } from './model.ts';
 
 const LOCK_MS = 10 * 60_000;
+// Every request runs the model on the one shared Groq key, so no one person can keep many going at once.
+const MAX_RUNNING_PER_PERSON = 3;
 
 /** A conversation locked by the request working on it. */
 export interface WorkingConversation {
@@ -29,7 +31,15 @@ export interface Owner {
 
 /** Locks one of the person's conversations for this request, or starts a new one when there is no id. */
 export async function openConversation(db: Db, owner: Owner, conversationId: string | undefined): Promise<WorkingConversation> {
-  const row = conversationId ? await lock(db, owner.userId, conversationId) : await create(db, owner);
+  const row = await db.transaction(async (tx) => {
+    // Holding the person's row makes their requests start one at a time, so two can't both take the last place.
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, owner.userId)).for('no key update');
+    const row = conversationId ? await lock(tx, owner.userId, conversationId) : await create(tx, owner);
+    // Counted after taking the conversation, so a request to one that is already busy is told that instead.
+    const running = await tx.$count(conversations, and(eq(conversations.userId, owner.userId), gte(conversations.lockedUntil, new Date())));
+    if (running > MAX_RUNNING_PER_PERSON) throw tooManyRunning();
+    return row;
+  });
   return working(db, row, owner.sessionId);
 }
 
@@ -82,6 +92,9 @@ export function idle(now: Date) {
 export const busy = () => new HttpError(409, 'conversation_busy', "I'm still working on your last request.");
 
 export const notFound = () => new HttpError(404, 'conversation_not_found', 'That conversation no longer exists. Start a new one.');
+
+const tooManyRunning = () =>
+  new HttpError(429, 'too_many_running', "I'm still working on your other requests. Try again when one of them has finished.");
 
 /** Why one of the person's conversations couldn't be used: a request is working on it, or it isn't there. */
 export async function unavailable(db: Db, userId: string, conversationId: string): Promise<HttpError> {

@@ -7,6 +7,8 @@ import { errorResponse, parseBody } from '../http.ts';
 import { eventStream } from '../sse.ts';
 import { decide, retry, sendMessage, signInExpired, type Turn, type TurnResult, type TurnStream } from './agent.ts';
 
+const TURNS_PER_MINUTE = 20;
+
 const MessageBody = z.object({
   conversationId: z.uuid().optional(),
   text: z.string().trim().min(1).max(4000),
@@ -30,23 +32,28 @@ export const ConversationParams = z.object({ conversationId: z.uuid() });
 
 export function registerAssistantRoutes(app: FastifyInstance, deps: AppDeps) {
   const session = requireSession(deps);
+  // Every turn runs the model on the one shared Groq key, so each person gets one allowance for all of these
+  // routes, across their devices. It is one limiter rather than route configs because the in-memory store keeps
+  // a separate count for each route config, even with a shared groupId.
+  const turnLimit = app.rateLimit({ max: TURNS_PER_MINUTE, timeWindow: '1 minute', keyGenerator: (request) => authOf(request).user.id });
+  const runsTurn = { preHandler: [session, turnLimit] };
 
   app.get('/assistant/capabilities', { preHandler: session }, async (): Promise<Capabilities> => ({
     systems: deps.registry.connectors.map(({ name, description, examples = [] }) => ({ name, description, examples: [...examples] })),
   }));
 
-  app.post('/assistant/messages', { preHandler: session }, async (request, reply) => {
+  app.post('/assistant/messages', runsTurn, async (request, reply) => {
     const body = parseBody(MessageBody, request.body);
     return answer(deps, request, reply, body, (turn) => sendMessage(turn, body.conversationId, body.text));
   });
 
-  app.post('/assistant/conversations/:conversationId/decision', { preHandler: session }, async (request, reply) => {
+  app.post('/assistant/conversations/:conversationId/decision', runsTurn, async (request, reply) => {
     const { conversationId } = parseBody(ConversationParams, request.params);
     const body = parseBody(DecisionBody, request.body);
     return answer(deps, request, reply, body, (turn) => decide(turn, conversationId, body.confirmationId, body.decision));
   });
 
-  app.post('/assistant/conversations/:conversationId/retry', { preHandler: session }, async (request, reply) => {
+  app.post('/assistant/conversations/:conversationId/retry', runsTurn, async (request, reply) => {
     const { conversationId } = parseBody(ConversationParams, request.params);
     const body = parseBody(RetryBody, request.body ?? {});
     return answer(deps, request, reply, body, (turn) => retry(turn, conversationId));
