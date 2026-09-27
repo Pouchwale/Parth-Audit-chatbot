@@ -19,6 +19,9 @@ export function newAssistantMessage(): AssistantMessage {
   return { id: randomUUID(), role: 'assistant', parts: [], status: 'streaming', error: null, createdAt: new Date().toISOString() };
 }
 
+/** Why a proposed change was not made when nobody confirmed it before it expired. */
+export const NOT_CONFIRMED_IN_TIME = 'The person did not confirm in time, so this change was not made.';
+
 export function confirmationPart(pending: PendingConfirmation): ConfirmationPart {
   return {
     type: 'confirmation',

@@ -29,6 +29,12 @@ Each person sees their own conversations in the app's history, named with a shor
 
 Conversations hold copies of data read from connected systems, so they are deleted 30 days after their last message (`CONVERSATION_RETENTION_DAYS` in `server/.env`). Deleting a conversation, by hand or after that time, never removes anything from the action log.
 
+### Sharing a conversation
+
+When someone has a problem, they press **Share** on a conversation and it downloads to their device as a Markdown file (on a phone, the share sheet opens so they can save or send it). The server writes the file, so what is recorded is exactly what was handed out. It starts with who exported it, the date and time with the weekday and year in their time zone (and in UTC), an export ID and the conversation ID, then has every message in order with its time: what the person wrote, the assistant's replies, each lookup, and each proposed change with its status and the decision. The footer repeats the export ID and says that every export is recorded.
+
+**Every download is recorded**: who, from which device and IP address, when, the file's SHA-256 fingerprint, and the full file itself. These records are the audit trail for data leaving the system, so they are kept for good: deleting a conversation, deleting all of them, or the 30-day clean-up never removes them. A copy of a file that turns up somewhere can be traced by the export ID printed in it, or by its fingerprint.
+
 ## Repository layout
 
 | Path | What |
@@ -78,7 +84,7 @@ Your phone and computer need to be on the same Wi-Fi. The app finds the server o
 
 ### Tests
 
-The tests run the real server against an in-memory database, a fake connected system and a scripted model. They cover sign-in logging, sessions, the confirmation rules (nothing runs until confirmed, and a confirmed change runs exactly once), streamed replies (including stopping and retrying one), conversation history and titles, voice transcription, and the super admin view.
+The tests run the real server against an in-memory database, a fake connected system and a scripted model. They cover sign-in logging, sessions, the confirmation rules (nothing runs until confirmed, and a confirmed change runs exactly once), streamed replies (including stopping and retrying one), conversation history and titles, voice transcription, sharing conversations and the download records, weekly reports (including week boundaries in another time zone), and the super admin view.
 
 ## Connectors
 
@@ -103,7 +109,18 @@ People sign in with their DCRS account. The server checks the credentials with D
 - **Every sign-in attempt** is recorded, successful or not, with the IP address, user agent and device (name, model, OS and version, app version).
 - **Each signed-in device** is a session. The server tracks its last IP and when it was last seen. A device that signs in again replaces its old session.
 - **Every action** is recorded: lookups, proposed changes, confirmations, cancellations and failures, along with what the person said.
+- **Every message** a person sends is counted (not its text), so the weekly numbers stay right after conversations are deleted.
+- **Every download** of a conversation is recorded with the file itself (see [Sharing a conversation](#sharing-a-conversation)).
 - **Super admins** (set by `SUPER_ADMINS`) see every account in the app: where it's signed in right now, what it last did, its recent actions and sign-ins. They can also sign a device out.
+
+### Security dashboard
+
+Only super admins can open it (**Security** in the menu). Opening it isn't recorded, and nothing in it holds a session token or password.
+
+- **Downloads**: every conversation download, newest first, with the person, the conversation's title at the time, the date, weekday, time and year, the device, IP address and size. Search by export ID, fingerprint (the whole of it, or its first 12 or more characters), title or name, and filter by person and period. Each download shows everything recorded about it, including exactly what was downloaded.
+- **Weekly reports**: for each week, what each person did: sign-ins (and failed ones), devices, messages, lookups, changes confirmed, cancelled or failed, and downloads with the conversations' titles. The week in progress is live. Once a week ends its report is stored and never changes afterwards; the server stores it within 15 minutes of the week ending, or when someone opens it first. The numbers come only from the logs, never from conversations, which their owners can delete.
+
+Weeks run from Monday 00:00 to Sunday 24:00 in `REPORT_TIME_ZONE` (in `server/.env`, an IANA time zone such as `Asia/Kolkata`; `UTC` when unset). A date without a time in the Downloads filters means that whole day in the same time zone.
 
 Behind a reverse proxy, set `TRUST_PROXY` so the logs record the real client IP.
 

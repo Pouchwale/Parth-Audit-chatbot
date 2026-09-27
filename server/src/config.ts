@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isTimeZone } from './time.ts';
 
 const Env = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
@@ -9,6 +10,7 @@ const Env = z.object({
   SESSION_TTL_DAYS: z.coerce.number().positive().default(30),
   CONFIRMATION_TTL_MINUTES: z.coerce.number().positive().default(10),
   CONVERSATION_RETENTION_DAYS: z.coerce.number().positive().default(30),
+  REPORT_TIME_ZONE: z.string().default('UTC').refine(isTimeZone, 'REPORT_TIME_ZONE must be an IANA time zone, such as Europe/London'),
   GROQ_API_KEY: z.string().optional(),
   GROQ_MODEL: z.string().default('openai/gpt-oss-120b'),
   GROQ_REASONING_EFFORT: z.enum(['', 'low', 'medium', 'high']).default('medium'),
@@ -31,6 +33,8 @@ export interface Config {
   sessionTtlMs: number;
   confirmationTtlMs: number;
   conversationRetentionMs: number;
+  /** IANA time zone whose Monday-to-Sunday weeks the weekly reports cover. */
+  reportTimeZone: string;
   /** Missing means the assistant can't answer yet; sign-in and the admin view still work. */
   groqApiKey: string | undefined;
   model: string;
@@ -65,6 +69,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sessionTtlMs: e.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
     confirmationTtlMs: e.CONFIRMATION_TTL_MINUTES * 60 * 1000,
     conversationRetentionMs: e.CONVERSATION_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    reportTimeZone: e.REPORT_TIME_ZONE,
     groqApiKey: e.GROQ_API_KEY,
     model: e.GROQ_MODEL,
     reasoningEffort: e.GROQ_REASONING_EFFORT,

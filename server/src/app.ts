@@ -1,6 +1,8 @@
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyServerOptions } from 'fastify';
+import { registerExportAuditRoutes } from './admin/exports.ts';
+import { registerReportRoutes } from './admin/reports.ts';
 import { registerAdminRoutes } from './admin/routes.ts';
 import { registerHistoryRoutes } from './agent/history.ts';
 import type { Model } from './agent/model.ts';
@@ -10,6 +12,7 @@ import { registerAuthRoutes } from './auth/routes.ts';
 import type { Config } from './config.ts';
 import type { Registry } from './connectors/registry.ts';
 import type { Db } from './db/index.ts';
+import { registerExportRoutes } from './exports/routes.ts';
 import { errorResponse } from './http.ts';
 import { registerVoiceRoutes } from './voice/routes.ts';
 import type { Transcriber } from './voice/transcriber.ts';
@@ -45,7 +48,10 @@ export async function buildApp(deps: AppDeps, options: { logger?: FastifyServerO
   registerAuthRoutes(app, deps);
   registerAssistantRoutes(app, deps);
   registerHistoryRoutes(app, deps);
+  registerExportRoutes(app, deps);
   registerVoiceRoutes(app, deps);
   registerAdminRoutes(app, deps);
+  registerExportAuditRoutes(app, deps);
+  registerReportRoutes(app, deps);
   return app;
 }

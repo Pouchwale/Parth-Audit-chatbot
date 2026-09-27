@@ -22,6 +22,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     sessionTtlMs: 30 * 24 * 3600_000,
     confirmationTtlMs: 10 * 60_000,
     conversationRetentionMs: 24 * 3600_000,
+    reportTimeZone: 'UTC',
     groqApiKey: undefined,
     model: 'test-model',
     reasoningEffort: '',
@@ -179,7 +180,7 @@ let shared: Promise<Database> | undefined;
 async function emptyDatabase(): Promise<Database> {
   shared ??= openDatabase('memory://');
   const database = await shared;
-  await database.db.execute(sql`truncate users, sessions, connector_credentials, login_events, conversations, actions cascade`);
+  await database.db.execute(sql`truncate users, sessions, connector_credentials, login_events, conversations, actions, message_events, conversation_exports, weekly_reports cascade`);
   return database;
 }
 

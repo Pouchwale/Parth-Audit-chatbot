@@ -1,4 +1,5 @@
 import type { Connector } from '../connectors/types.ts';
+import { isTimeZone, localDate } from '../time.ts';
 
 export interface PromptInput {
   displayName: string;
@@ -11,7 +12,7 @@ export interface PromptInput {
 export function systemPrompt({ displayName, username, connectors, now, timeZone }: PromptInput): string {
   const zone = timeZone && isTimeZone(timeZone) ? timeZone : 'UTC';
   const spoken = new Intl.DateTimeFormat('en-GB', { timeZone: zone, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(now);
-  const iso = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const iso = localDate(now, zone);
   const systems = connectors.map((c) => `- ${c.name}: ${c.description} Its tools start with "${c.id}__".`).join('\n');
 
   return `You are the voice and chat assistant that people in this organization use on their phones to get work done in its business systems. You act for the signed-in person, with their own permissions in each system, through the tools provided. Those tools are the only things you can do.
@@ -35,13 +36,4 @@ How to reply:
 - Use simple markdown only when it helps: a short bullet list when there are several records, and **bold** for record IDs. No headings, tables or emoji.
 - Lead with the outcome, for example "Done. Finding **12** is now closed."
 - Say dates and numbers the way a person would say them out loud.`;
-}
-
-function isTimeZone(zone: string): boolean {
-  try {
-    new Intl.DateTimeFormat('en-GB', { timeZone: zone });
-    return true;
-  } catch {
-    return false;
-  }
 }

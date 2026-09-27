@@ -255,3 +255,114 @@ export interface ApiError {
   error: string;
   message: string;
 }
+
+// ── Conversation export (the Share button) ──────────────────────────────────────────────────────
+// The server builds the file, so the audit log holds exactly what was handed out. Every export is recorded.
+
+export interface ExportRequest {
+  /** IANA time zone used for the dates written in the file. */
+  timeZone?: string;
+}
+
+export interface ConversationExport {
+  /** Printed in the file, so a copy that turns up somewhere can be traced to this export. */
+  id: string;
+  filename: string;
+  mimeType: string;
+  /** The file's full text. */
+  content: string;
+  /** SHA-256 of the UTF-8 content, hex: the file's fingerprint. */
+  sha256: string;
+  createdAt: string;
+}
+
+// ── Security dashboard (super admins only) ──────────────────────────────────────────────────────
+
+export interface PersonRef {
+  id: string;
+  username: string;
+  displayName: string;
+}
+
+export interface ExportDevice {
+  name: string | null;
+  model: string | null;
+  os: string | null;
+  osVersion: string | null;
+  appVersion: string | null;
+}
+
+/** One download of a conversation. */
+export interface ExportEntry {
+  id: string;
+  user: PersonRef;
+  conversationId: string;
+  /** The title when it was exported (the conversation may since have been renamed or deleted). */
+  conversationTitle: string;
+  filename: string;
+  sizeBytes: number;
+  messageCount: number;
+  sha256: string;
+  ip: string | null;
+  device: ExportDevice | null;
+  at: string;
+}
+
+export interface ExportDetail extends ExportEntry {
+  /** Exactly what was downloaded. */
+  content: string;
+  userAgent: string | null;
+  /** The time zone the person's device reported. */
+  timeZone: string | null;
+}
+
+export interface ExportPage {
+  exports: ExportEntry[];
+  /** Pass as `before` to get the next (older) page; null when there are no more. */
+  nextBefore: string | null;
+}
+
+export interface WeeklyUserSummary {
+  user: PersonRef;
+  signIns: number;
+  failedSignIns: number;
+  /** Distinct devices that signed in during the week. */
+  devices: number;
+  messages: number;
+  lookups: number;
+  changesConfirmed: number;
+  changesCancelled: number;
+  changesFailed: number;
+  exports: number;
+  exportedBytes: number;
+  /** Titles of the conversations downloaded that week. */
+  exportedConversations: string[];
+  lastActiveAt: string | null;
+}
+
+export interface WeeklyTotals {
+  activeUsers: number;
+  signIns: number;
+  failedSignIns: number;
+  messages: number;
+  lookups: number;
+  changesConfirmed: number;
+  exports: number;
+  exportedBytes: number;
+}
+
+export interface WeeklyReportSummary {
+  /** Monday the week starts, YYYY-MM-DD, in the server's report time zone. */
+  weekStart: string;
+  /** The Sunday it ends, YYYY-MM-DD. */
+  weekEnd: string;
+  timeZone: string;
+  /** False for the week in progress, whose numbers are live. */
+  complete: boolean;
+  generatedAt: string;
+  totals: WeeklyTotals;
+}
+
+export interface WeeklyReport extends WeeklyReportSummary {
+  users: WeeklyUserSummary[];
+}

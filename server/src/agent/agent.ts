@@ -18,7 +18,7 @@ import { loadCredentials } from '../auth/sessions.ts';
 import type { Registry, ToolBinding } from '../connectors/registry.ts';
 import { ConnectorError } from '../connectors/types.ts';
 import { one, type Db } from '../db/index.ts';
-import { actions, conversations, type PendingCall, type PendingConfirmation } from '../db/schema.ts';
+import { actions, conversations, messageEvents, type PendingCall, type PendingConfirmation } from '../db/schema.ts';
 import { errorResponse, HttpError } from '../http.ts';
 import { openConversation, openInterrupted, type WorkingConversation } from './conversation.ts';
 import { explainGroqError, type ModelRequest, type Tool, type ToolMessage } from './model.ts';
@@ -30,6 +30,7 @@ import {
   messageWriter,
   newAssistantMessage,
   newUserMessage,
+  NOT_CONFIRMED_IN_TIME,
   setChangeStatus,
   setMessageStatus,
   type MessageWriter,
@@ -91,6 +92,9 @@ export async function sendMessage(turn: Turn, conversationId: string | undefined
       message,
       userMessage,
       work: async (reply) => {
+        await turn.deps.db
+          .insert(messageEvents)
+          .values({ userId: turn.userId, sessionId: turn.sessionId, conversationId: conv.id, chars: text.length });
         const naming = conversationId ? undefined : nameConversation(turn, conv, text);
         try {
           return await runModel(turn, conv, reply, text);
@@ -444,7 +448,7 @@ async function skip(turn: Turn, call: PendingCall, reason: string): Promise<Tool
 
 const DROPPED = {
   cancelled: 'The person cancelled this change, so it was not made.',
-  expired: 'The person did not confirm in time, so this change was not made.',
+  expired: NOT_CONFIRMED_IN_TIME,
   superseded: 'The person moved on without confirming, so this change was not made.',
 };
 

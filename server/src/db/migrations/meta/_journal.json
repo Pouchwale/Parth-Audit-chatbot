@@ -15,6 +15,13 @@
       "when": 1790416801433,
       "tag": "0001_chat_history",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790491663570,
+      "tag": "0002_conversation_exports",
+      "breakpoints": true
     }
   ]
 }

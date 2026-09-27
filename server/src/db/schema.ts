@@ -1,6 +1,6 @@
-import { boolean, index, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, date, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { Message, ToolMessage } from '../agent/model.ts';
-import type { ActionStatus, ChatMessage, DeviceInfo } from '@shared/api.ts';
+import type { ActionStatus, ChatMessage, DeviceInfo, ExportDevice, WeeklyReport } from '@shared/api.ts';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 
@@ -147,3 +147,58 @@ export const actions = pgTable(
   },
   (t) => [index('actions_user_id').on(t.userId, t.createdAt)],
 );
+
+// One row per message a person sent that the assistant took on, without its text. Conversations can be
+// deleted, so the weekly reports count messages from here.
+export const messageEvents = pgTable(
+  'message_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    conversationId: uuid('conversation_id').notNull(),
+    chars: integer('chars').notNull(),
+    createdAt: at('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('message_events_created_at').on(t.createdAt)],
+);
+
+// Every conversation download (the Share button), with exactly what was handed out. This is the audit trail for
+// data leaving the system, so it outlives the conversation and even the account: nothing that deletes those
+// deletes these, and each row keeps its own copy of who, what and from where.
+export const conversationExports = pgTable(
+  'conversation_exports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    username: text('username').notNull(),
+    displayName: text('display_name').notNull(),
+    sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    conversationId: uuid('conversation_id').notNull(),
+    conversationTitle: text('conversation_title').notNull(),
+    filename: text('filename').notNull(),
+    mimeType: text('mime_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    messageCount: integer('message_count').notNull(),
+    sha256: text('sha256').notNull(),
+    content: text('content').notNull(),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+    device: jsonb('device').$type<ExportDevice>(),
+    timeZone: text('time_zone'),
+    createdAt: at('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('conversation_exports_user_id').on(t.userId, t.createdAt),
+    index('conversation_exports_created_at').on(t.createdAt, t.id),
+    index('conversation_exports_sha256').on(t.sha256),
+  ],
+);
+
+// The report of each completed week, stored once and never changed.
+export const weeklyReports = pgTable('weekly_reports', {
+  weekStart: date('week_start', { mode: 'string' }).primaryKey(),
+  timeZone: text('time_zone').notNull(),
+  generatedAt: at('generated_at').notNull(),
+  report: jsonb('report').$type<WeeklyReport>().notNull(),
+});

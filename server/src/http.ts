@@ -1,4 +1,4 @@
-import type { FastifyRequest } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { ApiError } from '@shared/api.ts';
 
@@ -48,4 +48,9 @@ export function clientIp(request: FastifyRequest): string {
 
 export function userAgent(request: FastifyRequest): string | null {
   return request.headers['user-agent']?.slice(0, 500) ?? null;
+}
+
+/** onRequest hook for responses holding downloaded conversations or audit records, which no cache may keep. */
+export async function noStore(_request: FastifyRequest, reply: FastifyReply) {
+  reply.header('cache-control', 'no-store');
 }
