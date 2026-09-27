@@ -1,22 +1,42 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull, lt, or } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
-import Groq from 'groq-sdk';
+import type Groq from 'groq-sdk';
 import { z } from 'zod';
-import type { ActionStatus, AssistantReply, Confirmation } from '@shared/api.ts';
+import type {
+  ActionStatus,
+  ActivityPart,
+  AssistantMessage,
+  AssistantReply,
+  Confirmation,
+  ConfirmationPart,
+  StreamEvent,
+  UserMessage,
+} from '@shared/api.ts';
 import type { AppDeps } from '../app.ts';
 import { loadCredentials } from '../auth/sessions.ts';
 import type { Registry, ToolBinding } from '../connectors/registry.ts';
 import { ConnectorError } from '../connectors/types.ts';
-import { one } from '../db/index.ts';
+import { one, type Db } from '../db/index.ts';
 import { actions, conversations, type PendingCall, type PendingConfirmation } from '../db/schema.ts';
-import { HttpError } from '../http.ts';
-import { isFailedToolCall, ModelNotConfigured, type Message, type ModelRequest, type Tool, type ToolMessage } from './model.ts';
+import { errorResponse, HttpError } from '../http.ts';
+import { openConversation, openInterrupted, type WorkingConversation } from './conversation.ts';
+import { explainGroqError, type ModelRequest, type Tool, type ToolMessage } from './model.ts';
 import { systemPrompt } from './prompt.ts';
+import { titleFor } from './titles.ts';
+import {
+  confirmationPart,
+  findConfirmation,
+  messageWriter,
+  newAssistantMessage,
+  newUserMessage,
+  setChangeStatus,
+  setMessageStatus,
+  type MessageWriter,
+} from './transcript.ts';
 
 const MAX_MODEL_CALLS = 8;
 const MAX_RESULT_CHARS = 60_000;
-const LOCK_MS = 10 * 60_000;
 
 /** One request from a signed-in person. */
 export interface Turn {
@@ -27,6 +47,14 @@ export interface Turn {
   username: string;
   displayName: string;
   timeZone: string | undefined;
+  /** Set when the client asked for the reply as a stream of events. */
+  stream?: TurnStream | undefined;
+}
+
+export interface TurnStream {
+  send(event: StreamEvent): void;
+  /** Aborts when the person stops the reply. */
+  readonly signal: AbortSignal;
 }
 
 export interface TurnResult extends AssistantReply {
@@ -40,30 +68,44 @@ interface Outcome {
   signedOut?: boolean;
 }
 
-interface WorkingConversation {
-  id: string;
-  messages: Message[];
-  pending: PendingConfirmation | null;
-  save(): Promise<void>;
+/** What a request does once it holds the conversation. */
+interface Plan {
+  /** The assistant message the request writes: a new one, or the one it continues. */
+  message: AssistantMessage;
+  /** The person's new message, when the request adds one. */
+  userMessage: UserMessage | null;
+  work(reply: MessageWriter): Promise<Outcome>;
 }
 
 /** Handles something the person said or typed. */
 export async function sendMessage(turn: Turn, conversationId: string | undefined, text: string): Promise<TurnResult> {
   return withConversation(turn, conversationId, async (conv) => {
-    if (conv.pending?.claimed) {
-      // A confirmed run was interrupted (e.g. a restart). Report what actually happened.
-      conv.messages.push(...(await settleInterrupted(turn, conv.pending)));
-    } else if (conv.pending) {
-      // The person moved on without answering, so the waiting changes are dropped.
-      conv.messages.push(...(await dropPending(turn, conv.pending, 'superseded')));
-    }
-    conv.pending = null;
+    await recoverInterrupted(turn.deps.db, conv);
+    // The person moved on without answering, so the waiting changes are dropped.
+    if (conv.pending) await dropPending(turn, conv, conv.pending, 'superseded');
+    const userMessage = newUserMessage(text);
+    const message = newAssistantMessage();
+    conv.transcript.push(userMessage, message);
     conv.messages.push({ role: 'user', content: text });
-    return runModel(turn, conv, text);
+    return {
+      message,
+      userMessage,
+      work: async (reply) => {
+        const naming = conversationId ? undefined : nameConversation(turn, conv, text);
+        try {
+          return await runModel(turn, conv, reply, text);
+        } finally {
+          await naming;
+        }
+      },
+    };
   });
 }
 
-/** Runs or drops the changes waiting for confirmation. Only the calls stored when they were proposed can run. */
+/**
+ * Runs or drops the changes waiting for confirmation. Only the calls stored when they were proposed can run.
+ * The decision continues the assistant message that proposed them.
+ */
 export async function decide(
   turn: Turn,
   conversationId: string,
@@ -72,57 +114,121 @@ export async function decide(
 ): Promise<TurnResult> {
   return withConversation(turn, conversationId, async (conv) => {
     const pending = conv.pending;
-    if (!pending || pending.id !== confirmationId || pending.claimed) {
-      throw new HttpError(409, 'confirmation_not_pending', 'That change was already handled.');
-    }
+    const shown = pending?.id === confirmationId && !pending.claimed ? findConfirmation(conv.transcript, pending.id) : undefined;
+    if (!pending || !shown) throw new HttpError(409, 'confirmation_not_pending', 'That change was already handled.');
 
-    if (decision === 'cancel' || Date.parse(pending.expiresAt) <= Date.now()) {
-      const why = decision === 'cancel' ? 'cancelled' : 'expired';
-      conv.pending = null;
-      conv.messages.push(...(await dropPending(turn, pending, why)));
-      return {
-        reply:
-          why === 'cancelled'
-            ? "Okay, I didn't change anything."
-            : "That request expired, so I didn't change anything. Ask me again if you still want it.",
-        confirmation: null,
-      };
-    }
-
-    // Claimed and saved before anything runs: if this request dies part-way, the confirmation can't be
-    // answered again, and the next message reports what actually happened (see settleInterrupted).
-    pending.claimed = true;
-    await conv.save();
-
-    const results = [...pending.results];
-    const outcomes: string[] = [];
-    let stop: 'failed' | 'signed_out' | null = null;
-    for (const call of pending.calls) {
-      if (stop) {
-        results.push(await skip(turn, call, 'Not done, because an earlier change in this request failed.'));
-        continue;
-      }
-      const run = await execute(turn, call.toolName, call.input, call.toolCallId, call.actionId);
-      results.push(run.result);
-      outcomes.push(run.ok ? `Done: ${call.summary}.` : `Couldn't ${lowerFirst(call.summary)}: ${run.error}`);
-      if (!run.ok) stop = run.signedOut ? 'signed_out' : 'failed';
-    }
-    conv.pending = null;
-    conv.messages.push(...results);
-    // Saved before asking the model to report back, so a model failure can never run these changes twice.
-    await conv.save();
-
-    if (stop === 'signed_out') return { reply: '', confirmation: null, signedOut: true };
-    try {
-      return await runModel(turn, conv, pending.request);
-    } catch (error) {
-      if (!(error instanceof HttpError)) throw error;
-      return { reply: outcomes.join(' '), confirmation: null };
-    }
+    return {
+      message: shown.message,
+      userMessage: null,
+      work: async (reply) => {
+        if (decision === 'confirm' && Date.parse(pending.expiresAt) > Date.now()) return confirm(turn, conv, reply, pending, shown.part);
+        const why = decision === 'cancel' ? 'cancelled' : 'expired';
+        await dropPending(turn, conv, pending, why);
+        reply.put(shown.part);
+        return {
+          reply:
+            why === 'cancelled'
+              ? "Okay, I didn't change anything."
+              : "That request expired, so I didn't change anything. Ask me again if you still want it.",
+          confirmation: null,
+        };
+      },
+    };
   });
 }
 
-async function runModel(turn: Turn, conv: WorkingConversation, request: string): Promise<Outcome> {
+/** Continues a reply that failed or was stopped, from the saved history, in the same assistant message. */
+export async function retry(turn: Turn, conversationId: string): Promise<TurnResult> {
+  return withConversation(turn, conversationId, async (conv) => {
+    await recoverInterrupted(turn.deps.db, conv);
+    // Answering the confirmation is what continues it. Its tool calls stay last in the history until then.
+    if (conv.pending) throw new HttpError(409, 'nothing_to_retry', 'That reply is waiting for you to confirm or cancel.');
+    const index = conv.transcript.findLastIndex((m) => m.role === 'assistant');
+    const message = conv.transcript[index];
+    const request = conv.transcript.slice(0, index).findLast((m) => m.role === 'user');
+    if (message?.role !== 'assistant' || (message.status !== 'error' && message.status !== 'stopped') || !request) {
+      throw new HttpError(409, 'nothing_to_retry', 'That reply has already finished.');
+    }
+    if (conv.messages.at(-1)?.role === 'assistant') {
+      // It was stopped part-way through its answer, so the answer is written again from the start.
+      conv.messages.pop();
+      if (message.parts.at(-1)?.type === 'text') message.parts.pop();
+    }
+    return { message, userMessage: null, work: (reply) => runModel(turn, conv, reply, request.text) };
+  });
+}
+
+/**
+ * Settles the requests cut off when the server last stopped, such as by a crash or a forced restart, and frees
+ * their conversations straight away instead of when their leases run out. Run it before the server takes requests.
+ * Returns how many conversations it settled.
+ */
+export async function recoverAfterRestart(db: Db): Promise<number> {
+  const interrupted = await openInterrupted(db);
+  for (const conv of interrupted) {
+    await recoverInterrupted(db, conv);
+    await conv.save({ unlock: true });
+  }
+  return interrupted.length;
+}
+
+/** The connected system stopped accepting the person's sign-in. */
+export function signInExpired(registry: Registry): HttpError {
+  return new HttpError(401, 'session_expired', `Your ${registry.signIn.name} sign-in has expired. Sign in again.`);
+}
+
+async function confirm(
+  turn: Turn,
+  conv: WorkingConversation,
+  reply: MessageWriter,
+  pending: PendingConfirmation,
+  part: ConfirmationPart,
+): Promise<Outcome> {
+  // Claimed and saved before anything runs: if this request dies part-way, the confirmation can't be
+  // answered again, and the next message reports what actually happened (see recoverInterrupted).
+  pending.claimed = true;
+  part.status = 'confirmed';
+  reply.put(part);
+  await conv.save();
+
+  const show = (call: PendingCall, status: ActionStatus, error: string | null) => {
+    setChangeStatus(part, call.actionId, status, error);
+    reply.put(part);
+  };
+  const results = [...pending.results];
+  const outcomes: string[] = [];
+  let stop: 'failed' | 'signed_out' | null = null;
+  for (const call of pending.calls) {
+    if (stop) {
+      const reason = 'Not done, because an earlier change in this request failed.';
+      results.push(await skip(turn, call, reason));
+      show(call, 'cancelled', reason);
+      continue;
+    }
+    show(call, 'running', null);
+    const run = await execute(turn, call.toolName, call.input, call.toolCallId, call.actionId);
+    show(call, run.ok ? 'succeeded' : 'failed', run.error ?? null);
+    results.push(run.result);
+    outcomes.push(run.ok ? `Done: ${call.summary}.` : `Couldn't ${lowerFirst(call.summary)}: ${run.error}`);
+    if (!run.ok) stop = run.signedOut ? 'signed_out' : 'failed';
+  }
+  conv.pending = null;
+  conv.messages.push(...results);
+  // Saved before asking the model to report back, so a model failure can never run these changes twice.
+  await conv.save();
+
+  if (stop === 'signed_out') return { reply: '', confirmation: null, signedOut: true };
+  try {
+    return await runModel(turn, conv, reply, pending.request);
+  } catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+    // The changes ran either way, so the person still hears how they went, and can retry the report.
+    setMessageStatus(reply.message, 'error', error.message);
+    return { reply: outcomes.join(' '), confirmation: null };
+  }
+}
+
+async function runModel(turn: Turn, conv: WorkingConversation, reply: MessageWriter, request: string): Promise<Outcome> {
   const { deps } = turn;
   const system = systemPrompt({
     displayName: turn.displayName,
@@ -134,14 +240,19 @@ async function runModel(turn: Turn, conv: WorkingConversation, request: string):
   const tools = toolDefinitions(deps.registry);
 
   for (let calls = 0; calls < MAX_MODEL_CALLS; calls++) {
-    const completion = await callModel(turn, { system, tools, messages: conv.messages });
+    reply.beginResponse();
+    const completion = await callModel(turn, { system, tools, messages: conv.messages }, reply);
+    if (!completion) return stopped(conv, reply);
     const choice = completion.choices[0];
     if (!choice || choice.finish_reason === 'length') {
-      // A tool call may be cut off, so nothing runs and the partial turn is dropped.
+      // A tool call may be cut off, so nothing runs and the partial response is dropped, its text too.
       turn.log.warn({ finishReason: choice?.finish_reason }, 'model response was incomplete');
-      return { reply: "Sorry, I couldn't work that out. Could you say it more simply?", confirmation: null };
+      reply.discardResponse();
+      return say(conv, reply, "Sorry, I couldn't work that out. Could you say it more simply?");
     }
     const { content, tool_calls: toolCalls = [], reasoning } = choice.message;
+    // A model that doesn't stream (such as the tests' scripted one) hands over its text at the end.
+    if (!reply.responseText && content) reply.text(content);
     conv.messages.push({
       role: 'assistant',
       content: content ?? '',
@@ -183,7 +294,18 @@ async function runModel(turn: Turn, conv: WorkingConversation, request: string):
         continue;
       }
       const actionId = await logAction(turn, conv.id, binding, parsed.data, summary, 'running', request);
+      const activity: ActivityPart = {
+        type: 'activity',
+        id: actionId,
+        system: binding.connector.name,
+        summary,
+        kind: binding.action.kind,
+        status: 'running',
+        error: null,
+      };
+      reply.put(activity);
       const run = await execute(turn, binding.toolName, parsed.data, call.id, actionId);
+      reply.put({ ...activity, status: run.ok ? 'succeeded' : 'failed', error: run.error ?? null });
       results.push(run.result);
       signedOut ||= run.signedOut;
     }
@@ -196,6 +318,7 @@ async function runModel(turn: Turn, conv: WorkingConversation, request: string):
     if (proposed.length > 0) {
       const expiresAt = new Date(Date.now() + deps.config.confirmationTtlMs).toISOString();
       conv.pending = { id: randomUUID(), expiresAt, request, results, calls: proposed };
+      reply.put(confirmationPart(conv.pending));
       return {
         reply: text,
         confirmation: { id: conv.pending.id, expiresAt, changes: proposed.map(({ system, summary }) => ({ system, summary })) },
@@ -203,31 +326,40 @@ async function runModel(turn: Turn, conv: WorkingConversation, request: string):
     }
     conv.messages.push(...results);
   }
-  return { reply: "Sorry, I couldn't finish that. Could you try it in smaller steps?", confirmation: null };
+  return say(conv, reply, "Sorry, I couldn't finish that. Could you try it in smaller steps?");
 }
 
 const SIGNED_OUT = 'Not run: the sign-in to the connected system has expired.';
 
-async function callModel(turn: Turn, request: ModelRequest): Promise<Groq.Chat.ChatCompletion> {
+/** Calls the model, writing its text into the reply as it streams. Returns nothing when the person stopped the reply. */
+async function callModel(turn: Turn, request: ModelRequest, reply: MessageWriter): Promise<Groq.Chat.ChatCompletion | undefined> {
+  const signal = turn.stream?.signal;
+  if (signal?.aborted) return undefined;
   try {
-    return await turn.deps.model(request);
+    const completion = await turn.deps.model(request, { signal, onText: reply.text });
+    return signal?.aborted ? undefined : completion;
   } catch (error) {
-    if (error instanceof ModelNotConfigured) {
-      throw new HttpError(503, 'assistant_not_configured', "The assistant isn't set up yet. Ask an administrator to add its Groq API key.");
-    }
-    if (!(error instanceof Groq.GroqError)) throw error;
-    turn.log.error({ err: error }, 'model call failed');
-    if (error instanceof Groq.AuthenticationError || error instanceof Groq.PermissionDeniedError) {
-      throw new HttpError(503, 'assistant_not_configured', "The assistant isn't set up correctly. Ask an administrator to check its Groq API key.");
-    }
-    if (error instanceof Groq.RateLimitError) {
-      throw new HttpError(503, 'assistant_busy', 'The assistant is busy right now. Try again in a minute.');
-    }
-    if (isFailedToolCall(error)) {
-      throw new HttpError(422, 'not_understood', "Sorry, I couldn't work that out. Could you say it another way?");
-    }
-    throw new HttpError(503, 'assistant_unavailable', 'The assistant is unavailable right now. Try again in a moment.');
+    if (signal?.aborted) return undefined;
+    // The unfinished response never reaches the history, so its text goes too: a retry writes it again.
+    reply.discardResponse();
+    throw explainGroqError(error, turn.log);
   }
+}
+
+/** The person stopped the reply. The text of the response being written is kept, but never a tool call from it. */
+function stopped(conv: WorkingConversation, reply: MessageWriter): Outcome {
+  const partial = reply.responseText;
+  if (partial) conv.messages.push({ role: 'assistant', content: partial });
+  setMessageStatus(reply.message, 'stopped');
+  return { reply: partial, confirmation: null };
+}
+
+/** A reply the server gives itself when the model couldn't. The model sees it as its own, as the person does. */
+function say(conv: WorkingConversation, reply: MessageWriter, text: string): Outcome {
+  reply.beginResponse();
+  reply.text(text);
+  conv.messages.push({ role: 'assistant', content: text });
+  return { reply: text, confirmation: null };
 }
 
 interface RunResult {
@@ -243,7 +375,7 @@ async function execute(turn: Turn, toolName: string, input: unknown, toolCallId:
   const parsed = binding?.action.input.safeParse(input);
   if (!binding || !parsed?.success) {
     const message = 'This action is no longer available.';
-    await finish(turn, actionId, 'failed', message);
+    await finish(deps.db, actionId, 'failed', message);
     return { ok: false, signedOut: false, error: message, result: toolError(toolCallId, message) };
   }
 
@@ -252,7 +384,7 @@ async function execute(turn: Turn, toolName: string, input: unknown, toolCallId:
     const credentials = await loadCredentials(deps, turn.sessionId, binding.connector.id);
     if (credentials === undefined) throw new ConnectorError('unauthorized', `You aren't signed in to ${binding.connector.name}.`);
     const output = await binding.action.run({ credentials }, parsed.data);
-    await finish(turn, actionId, 'succeeded', null);
+    await finish(deps.db, actionId, 'succeeded', null);
 
     const json = JSON.stringify(output ?? null);
     if (json.length <= MAX_RESULT_CHARS) return { ok: true, signedOut: false, result: toolResult(toolCallId, json) };
@@ -265,7 +397,7 @@ async function execute(turn: Turn, toolName: string, input: unknown, toolCallId:
     const known = error instanceof ConnectorError ? error : undefined;
     if (!known) turn.log.error({ err: error, tool: toolName }, 'connector action failed unexpectedly');
     const message = known?.message ?? `${binding.connector.name} returned an unexpected error.`;
-    await finish(turn, actionId, 'failed', message);
+    await finish(deps.db, actionId, 'failed', message);
     // Losing the sign-in connector's session means the person has to sign in again.
     const signedOut = known?.kind === 'unauthorized' && binding.connector.id === deps.registry.signIn.id;
     return { ok: false, signedOut, error: message, result: toolError(toolCallId, message) };
@@ -301,12 +433,12 @@ async function logAction(
   return row.id;
 }
 
-async function finish(turn: Turn, actionId: string, status: ActionStatus, error: string | null) {
-  await turn.deps.db.update(actions).set({ status, error, finishedAt: new Date() }).where(eq(actions.id, actionId));
+async function finish(db: Db, actionId: string, status: ActionStatus, error: string | null) {
+  await db.update(actions).set({ status, error, finishedAt: new Date() }).where(eq(actions.id, actionId));
 }
 
 async function skip(turn: Turn, call: PendingCall, reason: string): Promise<ToolMessage> {
-  await finish(turn, call.actionId, 'cancelled', reason);
+  await finish(turn.deps.db, call.actionId, 'cancelled', reason);
   return toolError(call.toolCallId, reason);
 }
 
@@ -316,87 +448,119 @@ const DROPPED = {
   superseded: 'The person moved on without confirming, so this change was not made.',
 };
 
-async function dropPending(turn: Turn, pending: PendingConfirmation, why: keyof typeof DROPPED): Promise<ToolMessage[]> {
+/** Drops the changes waiting for confirmation: nothing runs, and both the model and the card show why. */
+async function dropPending(turn: Turn, conv: WorkingConversation, pending: PendingConfirmation, why: keyof typeof DROPPED) {
   const results = [...pending.results];
   for (const call of pending.calls) results.push(await skip(turn, call, DROPPED[why]));
-  return results;
+  // The card changes only once the log has them all, so a failure part-way leaves it open to answer again.
+  const part = findConfirmation(conv.transcript, pending.id)?.part;
+  if (part) {
+    part.status = why === 'expired' ? 'expired' : 'cancelled';
+    for (const call of pending.calls) setChangeStatus(part, call.actionId, 'cancelled', DROPPED[why]);
+  }
+  conv.messages.push(...results);
+  conv.pending = null;
 }
 
-/** Results for confirmed calls whose run was interrupted, taken from the action log. */
-async function settleInterrupted(turn: Turn, pending: PendingConfirmation): Promise<ToolMessage[]> {
+// What an interrupted confirmed run left unfinished. Changes run one at a time, each marked running just
+// before it is made, so one still awaiting confirmation was never started.
+const UNFINISHED: Partial<Record<ActionStatus, { status: ActionStatus; error: string }>> = {
+  awaiting_confirmation: { status: 'cancelled', error: 'The run was interrupted before this change started, so it was not made.' },
+  running: {
+    status: 'failed',
+    error: 'The run was interrupted, so it is not known whether this change was made. Check the system before trying again.',
+  },
+};
+
+/** Tidies up after a request that died part-way, such as in a restart, before the conversation is used again. */
+async function recoverInterrupted(db: Db, conv: WorkingConversation) {
+  const pending = conv.pending;
+  for (const message of conv.transcript) {
+    if (message.role !== 'assistant' || message.status !== 'streaming') continue;
+    // A decision that died before it took effect: the message is as it was, with its confirmation still open.
+    const undecided = pending && !pending.claimed && message.parts.some((part) => part.type === 'confirmation' && part.id === pending.id);
+    if (undecided) setMessageStatus(message, 'complete');
+    else setMessageStatus(message, 'error', 'This reply was interrupted. Try again.');
+  }
+  if (!pending?.claimed) return;
+
+  // A confirmed run was interrupted. Report what actually happened, from the action log.
+  const part = findConfirmation(conv.transcript, pending.id)?.part;
   const results = [...pending.results];
   for (const call of pending.calls) {
-    const [row] = await turn.deps.db.select().from(actions).where(eq(actions.id, call.actionId));
-    if (row?.status === 'succeeded') {
-      results.push(toolResult(call.toolCallId, 'This change was made.'));
-    } else if (row?.status === 'failed' || row?.status === 'cancelled') {
-      results.push(toolError(call.toolCallId, row.error ?? 'This change was not made.'));
-    } else {
-      const unknown = 'The run was interrupted, so it is not known whether this change was made. Check the system before trying again.';
-      await finish(turn, call.actionId, 'failed', unknown);
-      results.push(toolError(call.toolCallId, unknown));
+    const [row] = await db.select().from(actions).where(eq(actions.id, call.actionId));
+    let status: ActionStatus = row?.status ?? 'running';
+    let error = row?.error ?? null;
+    const unfinished = UNFINISHED[status];
+    if (unfinished) {
+      ({ status, error } = unfinished);
+      await finish(db, call.actionId, status, error);
     }
+    results.push(
+      status === 'succeeded' ? toolResult(call.toolCallId, 'This change was made.') : toolError(call.toolCallId, error ?? 'This change was not made.'),
+    );
+    if (part) setChangeStatus(part, call.actionId, status, error);
   }
-  return results;
+  conv.messages.push(...results);
+  conv.pending = null;
+}
+
+/** Names a new conversation while its first reply is written. A failure here never fails the reply. */
+async function nameConversation(turn: Turn, conv: WorkingConversation, firstMessage: string) {
+  const title = await titleFor(turn.deps.titler, firstMessage, turn.log);
+  try {
+    await turn.deps.db.update(conversations).set({ title }).where(eq(conversations.id, conv.id));
+  } catch (error) {
+    turn.log.error({ err: error }, 'could not save the conversation title');
+    return;
+  }
+  conv.title = title;
+  turn.stream?.send({ type: 'title', title });
 }
 
 async function withConversation(
   turn: Turn,
   conversationId: string | undefined,
-  work: (conv: WorkingConversation) => Promise<Outcome>,
+  plan: (conv: WorkingConversation) => Promise<Plan>,
 ): Promise<TurnResult> {
-  const { db } = turn.deps;
-  const row = conversationId ? await lock(turn, conversationId) : await create(turn);
-  const conv: WorkingConversation = {
-    id: row.id,
-    messages: row.messages,
-    pending: row.pending,
-    save: async () => {
-      await db
-        .update(conversations)
-        .set({ messages: conv.messages, pending: conv.pending, sessionId: turn.sessionId, updatedAt: new Date() })
-        .where(eq(conversations.id, conv.id));
-    },
-  };
+  const conv = await openConversation(turn.deps.db, turn, conversationId);
+  let prepared: Plan;
+  try {
+    prepared = await plan(conv);
+  } catch (error) {
+    // Nothing has started yet, so the conversation stays as it was.
+    await conv.release();
+    throw error;
+  }
+  const { message, userMessage, work } = prepared;
 
   let outcome: Outcome;
   try {
-    outcome = await work(conv);
+    setMessageStatus(message, 'streaming');
+    // Saved straight away, so the history shows the request while it is answered.
+    await conv.save();
+    turn.stream?.send({ type: 'start', conversationId: conv.id, title: conv.title, userMessage, message });
+    outcome = await work(messageWriter(message, (event) => turn.stream?.send(event)));
   } catch (error) {
-    await db.update(conversations).set({ lockedUntil: null }).where(eq(conversations.id, conv.id));
+    setMessageStatus(message, 'error', errorResponse(error).body.message);
+    // Tool calls whose results never came can't be sent to the model again.
+    const last = conv.messages.at(-1);
+    if (!conv.pending && last?.role === 'assistant' && last.tool_calls?.length) conv.messages.pop();
+    await conv.save({ unlock: true });
     throw error;
   }
-  await db
-    .update(conversations)
-    .set({ messages: conv.messages, pending: conv.pending, sessionId: turn.sessionId, updatedAt: new Date(), lockedUntil: null })
-    .where(eq(conversations.id, conv.id));
-  return { conversationId: conv.id, reply: outcome.reply, confirmation: outcome.confirmation, signedOut: outcome.signedOut ?? false };
-}
 
-// A lease rather than a transaction: one request at a time per conversation, without holding a
-// database connection open while the model thinks.
-async function lock(turn: Turn, conversationId: string) {
-  const { db } = turn.deps;
-  const now = new Date();
-  const mine = and(eq(conversations.id, conversationId), eq(conversations.userId, turn.userId));
-  const [row] = await db
-    .update(conversations)
-    .set({ lockedUntil: new Date(now.getTime() + LOCK_MS) })
-    .where(and(mine, or(isNull(conversations.lockedUntil), lt(conversations.lockedUntil, now))))
-    .returning();
-  if (row) return row;
-  const [exists] = await db.select({ id: conversations.id }).from(conversations).where(mine);
-  if (exists) throw new HttpError(409, 'conversation_busy', "I'm still working on your last request.");
-  throw new HttpError(404, 'conversation_not_found', 'That conversation has ended. Start a new one.');
-}
-
-async function create(turn: Turn) {
-  return one(
-    await turn.deps.db
-      .insert(conversations)
-      .values({ userId: turn.userId, sessionId: turn.sessionId, messages: [], lockedUntil: new Date(Date.now() + LOCK_MS) })
-      .returning(),
-  );
+  if (outcome.signedOut) setMessageStatus(message, 'error', signInExpired(turn.deps.registry).message);
+  else if (message.status === 'streaming') setMessageStatus(message, 'complete');
+  await conv.save({ unlock: true });
+  return {
+    conversationId: conv.id,
+    reply: outcome.reply,
+    confirmation: outcome.confirmation,
+    message,
+    title: conv.title,
+    signedOut: outcome.signedOut ?? false,
+  };
 }
 
 const toolCache = new WeakMap<Registry, Tool[]>();

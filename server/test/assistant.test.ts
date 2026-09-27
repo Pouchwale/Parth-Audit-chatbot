@@ -1,10 +1,11 @@
 import { eq } from 'drizzle-orm';
 import Groq from 'groq-sdk';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { AssistantReply } from '@shared/api.ts';
+import type { AssistantMessage, AssistantReply, ConfirmationPart, ConversationDetail } from '@shared/api.ts';
+import { recoverAfterRestart } from '../src/agent/agent.ts';
 import { ModelNotConfigured } from '../src/agent/model.ts';
 import { actions, conversations, sessions } from '../src/db/schema.ts';
-import { callsTool, fails, says, setup } from './helpers.ts';
+import { callsTool, callsTools, fails, says, setup } from './helpers.ts';
 
 let t: Awaited<ReturnType<typeof setup>>;
 beforeEach(async () => {
@@ -194,6 +195,105 @@ it('reports what happened after an interrupted confirmed run, and never runs it 
     { role: 'user', content: 'Did that work?' },
   ]);
   expect(t.system.calls).toEqual([]);
+});
+
+/** Leaves the conversation as a restart part-way through a request would: changed by it, and still locked. */
+async function leftByRestart(change: (conv: typeof conversations.$inferSelect) => void) {
+  const [conv] = await t.db.select().from(conversations);
+  change(conv!);
+  await t.db.update(conversations).set({ ...conv!, lockedUntil: new Date(Date.now() + 60_000) });
+}
+
+async function savedMessages(token: string, conversationId: string) {
+  return (await t.as(token).get(`/assistant/conversations/${conversationId}`)).json<ConversationDetail>().messages;
+}
+
+it('settles a reply cut off by a restart, so it can be retried straight away', async () => {
+  const alice = await t.signIn('alice');
+  let midReply: typeof conversations.$inferSelect | undefined;
+  t.model.queue(async (request, options) => {
+    [midReply] = await t.db.select().from(conversations);
+    return says('Two items are open.')(request, options);
+  });
+  const { conversationId } = (await ask(alice, 'What is still open?')).json<AssistantReply>();
+  // As if the server stopped while the model was answering.
+  await t.db.update(conversations).set(midReply!);
+  expect((await ask(alice, 'Hello?', conversationId)).json()).toMatchObject({ error: 'conversation_busy' });
+
+  expect(await recoverAfterRestart(t.db)).toBe(1);
+  const [, interrupted] = await savedMessages(alice, conversationId);
+  expect(interrupted).toMatchObject({ role: 'assistant', status: 'error', error: 'This reply was interrupted. Try again.', parts: [] });
+
+  t.model.queue(says('Two items are open.'));
+  const retried = await t.as(alice).post(`/assistant/conversations/${conversationId}/retry`, {});
+  expect(retried.json<AssistantReply>().message).toMatchObject({ id: interrupted!.id, status: 'complete' });
+  expect(sentToModel(1)).toEqual([{ role: 'user', content: 'What is still open?' }]);
+  expect(await recoverAfterRestart(t.db)).toBe(0);
+});
+
+it('after a restart part-way through confirmed changes, tells a change that never started from one that was running', async () => {
+  const alice = await t.signIn('alice');
+  t.model.queue(callsTools([['fake__close_item', { id: '12', note: 'done' }], ['fake__close_item', { id: '13', note: 'done' }]]));
+  const proposed = (await ask(alice, 'Close items 12 and 13')).json<AssistantReply>();
+  const card = (message: AssistantMessage) => message.parts.find((part): part is ConfirmationPart => part.type === 'confirmation')!;
+  const [first, second] = card(proposed.message).changes.map((change) => change.id);
+
+  // The confirmation was claimed and the first change was being made.
+  await leftByRestart((conv) => {
+    const message = conv.transcript[1] as AssistantMessage;
+    message.status = 'streaming';
+    card(message).status = 'confirmed';
+    conv.pending!.claimed = true;
+  });
+  await t.db.update(actions).set({ status: 'running' }).where(eq(actions.id, first!));
+
+  expect(await recoverAfterRestart(t.db)).toBe(1);
+  const unknown = 'The run was interrupted, so it is not known whether this change was made. Check the system before trying again.';
+  const notMade = 'The run was interrupted before this change started, so it was not made.';
+  const log = await t.db.select({ id: actions.id, status: actions.status, error: actions.error }).from(actions);
+  expect(log).toEqual(
+    expect.arrayContaining([
+      { id: first, status: 'failed', error: unknown },
+      { id: second, status: 'cancelled', error: notMade },
+    ]),
+  );
+  const [, message] = (await savedMessages(alice, proposed.conversationId)) as AssistantMessage[];
+  expect(message).toMatchObject({ status: 'error' });
+  expect(card(message!)).toMatchObject({
+    status: 'confirmed',
+    changes: [
+      { id: first, status: 'failed', error: unknown },
+      { id: second, status: 'cancelled', error: notMade },
+    ],
+  });
+
+  t.model.queue(says('Item 12 may have been closed. Item 13 was not.'));
+  expect((await t.as(alice).post(`/assistant/conversations/${proposed.conversationId}/retry`, {})).statusCode).toBe(200);
+  expect(sentToModel(1).slice(-2)).toMatchObject([
+    { role: 'tool', content: error(unknown) },
+    { role: 'tool', content: error(notMade) },
+  ]);
+  expect(t.system.calls).toEqual([]);
+});
+
+it('keeps a confirmation open when a restart cut off the answer to it before it took effect', async () => {
+  const alice = await t.signIn('alice');
+  t.model.queue(callsTool('fake__close_item', { id: '12', note: 'done' }, 'I can close item 12.'));
+  const proposed = (await ask(alice, 'Close item 12')).json<AssistantReply>();
+  await leftByRestart((conv) => {
+    (conv.transcript[1] as AssistantMessage).status = 'streaming';
+  });
+
+  expect(await recoverAfterRestart(t.db)).toBe(1);
+  expect((await savedMessages(alice, proposed.conversationId))[1]).toEqual(proposed.message);
+  const retried = await t.as(alice).post(`/assistant/conversations/${proposed.conversationId}/retry`, {});
+  expect(retried.statusCode).toBe(409);
+  expect(retried.json()).toMatchObject({ error: 'nothing_to_retry' });
+
+  t.model.queue(says('Item 12 is closed.'));
+  expect((await answer(alice, proposed, 'confirm')).json<AssistantReply>().reply).toBe('Item 12 is closed.');
+  expect(sentToModel(1).map((m) => m.role)).toEqual(['user', 'assistant', 'tool']);
+  expect(t.system.calls).toHaveLength(1);
 });
 
 it('explains when the assistant has no API key yet', async () => {

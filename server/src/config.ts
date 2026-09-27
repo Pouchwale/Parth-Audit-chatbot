@@ -8,10 +8,12 @@ const Env = z.object({
   SUPER_ADMINS: z.string().default(''),
   SESSION_TTL_DAYS: z.coerce.number().positive().default(30),
   CONFIRMATION_TTL_MINUTES: z.coerce.number().positive().default(10),
-  CONVERSATION_RETENTION_HOURS: z.coerce.number().positive().default(24),
+  CONVERSATION_RETENTION_DAYS: z.coerce.number().positive().default(30),
   GROQ_API_KEY: z.string().optional(),
   GROQ_MODEL: z.string().default('openai/gpt-oss-120b'),
   GROQ_REASONING_EFFORT: z.enum(['', 'low', 'medium', 'high']).default('medium'),
+  GROQ_TITLE_MODEL: z.string().default('openai/gpt-oss-20b'),
+  GROQ_TRANSCRIPTION_MODEL: z.string().default('whisper-large-v3-turbo'),
   DCRS_BASE_URL: z.url().optional(),
   TRUST_PROXY: z.string().optional(),
   CORS_ORIGINS: z.string().default('http://localhost:8081,http://127.0.0.1:8081'),
@@ -34,6 +36,10 @@ export interface Config {
   model: string;
   /** For reasoning models such as gpt-oss. Empty sends nothing. */
   reasoningEffort: '' | 'low' | 'medium' | 'high';
+  /** Names new conversations. */
+  titleModel: string;
+  /** Turns voice recordings into text. */
+  transcriptionModel: string;
   dcrsBaseUrl: string | undefined;
   trustProxy: boolean | string[] | ((address: string, hop: number) => boolean);
   corsOrigins: string[];
@@ -58,10 +64,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     superAdmins: new Set(list(e.SUPER_ADMINS).map((u) => u.toLowerCase())),
     sessionTtlMs: e.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
     confirmationTtlMs: e.CONFIRMATION_TTL_MINUTES * 60 * 1000,
-    conversationRetentionMs: e.CONVERSATION_RETENTION_HOURS * 60 * 60 * 1000,
+    conversationRetentionMs: e.CONVERSATION_RETENTION_DAYS * 24 * 60 * 60 * 1000,
     groqApiKey: e.GROQ_API_KEY,
     model: e.GROQ_MODEL,
     reasoningEffort: e.GROQ_REASONING_EFFORT,
+    titleModel: e.GROQ_TITLE_MODEL,
+    transcriptionModel: e.GROQ_TRANSCRIPTION_MODEL,
     dcrsBaseUrl: e.DCRS_BASE_URL,
     trustProxy: parseTrustProxy(e.TRUST_PROXY),
     corsOrigins: list(e.CORS_ORIGINS),

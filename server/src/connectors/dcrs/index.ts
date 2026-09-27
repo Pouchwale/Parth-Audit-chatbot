@@ -8,6 +8,7 @@ export function createDcrsConnector(_options: { baseUrl: string | undefined }): 
     name: 'Digital Controlled Record System',
     description: "The factory's audit and compliance record system.",
     actions: [],
+    examples: [],
     async authenticate() {
       throw new ConnectorError('unavailable', 'The Digital Controlled Record System connector is not set up yet.');
     },

@@ -32,6 +32,7 @@ export function createDemoConnector(): Connector {
     id: 'demo',
     name: 'Demo Records',
     description: 'Sample audit findings for trying the assistant. Not a real system.',
+    examples: ['What findings are still open?', 'Close F-101, the pallets were moved', 'Show me the closed findings'],
     actions: [
       defineAction({
         name: 'list_findings',

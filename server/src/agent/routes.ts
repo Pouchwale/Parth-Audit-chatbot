@@ -1,51 +1,102 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { AssistantReply, DecisionRequest, MessageRequest } from '@shared/api.ts';
+import type { AssistantReply, Capabilities, DecisionRequest, MessageRequest, RetryRequest } from '@shared/api.ts';
 import type { AppDeps } from '../app.ts';
 import { authOf, endSession, requireSession } from '../auth/sessions.ts';
-import { HttpError, parseBody } from '../http.ts';
-import { decide, sendMessage, type Turn, type TurnResult } from './agent.ts';
+import { errorResponse, parseBody } from '../http.ts';
+import { eventStream } from '../sse.ts';
+import { decide, retry, sendMessage, signInExpired, type Turn, type TurnResult, type TurnStream } from './agent.ts';
 
 const MessageBody = z.object({
   conversationId: z.uuid().optional(),
   text: z.string().trim().min(1).max(4000),
   timeZone: z.string().max(100).optional(),
+  stream: z.boolean().optional(),
 }) satisfies z.ZodType<MessageRequest>;
 
 const DecisionBody = z.object({
   confirmationId: z.uuid(),
   decision: z.enum(['confirm', 'cancel']),
   timeZone: z.string().max(100).optional(),
+  stream: z.boolean().optional(),
 }) satisfies z.ZodType<DecisionRequest>;
 
-const ConversationParams = z.object({ conversationId: z.uuid() });
+const RetryBody = z.object({
+  timeZone: z.string().max(100).optional(),
+  stream: z.boolean().optional(),
+}) satisfies z.ZodType<RetryRequest>;
+
+export const ConversationParams = z.object({ conversationId: z.uuid() });
 
 export function registerAssistantRoutes(app: FastifyInstance, deps: AppDeps) {
   const session = requireSession(deps);
 
-  app.post('/assistant/messages', { preHandler: session }, async (request) => {
+  app.get('/assistant/capabilities', { preHandler: session }, async (): Promise<Capabilities> => ({
+    systems: deps.registry.connectors.map(({ name, description, examples = [] }) => ({ name, description, examples: [...examples] })),
+  }));
+
+  app.post('/assistant/messages', { preHandler: session }, async (request, reply) => {
     const body = parseBody(MessageBody, request.body);
-    const result = await sendMessage(turnFor(deps, request, body.timeZone), body.conversationId, body.text);
-    return respond(deps, request, result);
+    return answer(deps, request, reply, body, (turn) => sendMessage(turn, body.conversationId, body.text));
   });
 
-  app.post('/assistant/conversations/:conversationId/decision', { preHandler: session }, async (request) => {
+  app.post('/assistant/conversations/:conversationId/decision', { preHandler: session }, async (request, reply) => {
     const { conversationId } = parseBody(ConversationParams, request.params);
     const body = parseBody(DecisionBody, request.body);
-    const result = await decide(turnFor(deps, request, body.timeZone), conversationId, body.confirmationId, body.decision);
-    return respond(deps, request, result);
+    return answer(deps, request, reply, body, (turn) => decide(turn, conversationId, body.confirmationId, body.decision));
+  });
+
+  app.post('/assistant/conversations/:conversationId/retry', { preHandler: session }, async (request, reply) => {
+    const { conversationId } = parseBody(ConversationParams, request.params);
+    const body = parseBody(RetryBody, request.body ?? {});
+    return answer(deps, request, reply, body, (turn) => retry(turn, conversationId));
   });
 }
 
-function turnFor(deps: AppDeps, request: FastifyRequest, timeZone: string | undefined): Turn {
-  const { user, session } = authOf(request);
-  return { deps, log: request.log, userId: user.id, sessionId: session.id, username: user.username, displayName: user.displayName, timeZone };
+/** Runs a turn and answers with one AssistantReply as JSON, or as server-sent events when the client asked to stream. */
+async function answer(
+  deps: AppDeps,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  options: { timeZone?: string | undefined; stream?: boolean | undefined },
+  run: (turn: Turn) => Promise<TurnResult>,
+): Promise<AssistantReply | undefined> {
+  if (!options.stream) return result(deps, request, await run(turnFor(deps, request, options.timeZone)));
+
+  const events = eventStream(reply);
+  try {
+    const finished = await run(turnFor(deps, request, options.timeZone, events));
+    events.send({ type: 'done', reply: await result(deps, request, finished) });
+  } catch (error) {
+    // The conversation lookup and checks run before the stream starts, so their errors are still plain JSON.
+    if (!events.started) throw error;
+    const { body, unexpected } = errorResponse(error);
+    if (unexpected) request.log.error({ err: error }, 'streamed request failed');
+    events.send({ type: 'error', ...body });
+  } finally {
+    events.end();
+  }
+  return undefined;
 }
 
-async function respond(deps: AppDeps, request: FastifyRequest, result: TurnResult): Promise<AssistantReply> {
-  if (result.signedOut) {
+function turnFor(deps: AppDeps, request: FastifyRequest, timeZone: string | undefined, stream?: TurnStream): Turn {
+  const { user, session } = authOf(request);
+  return {
+    deps,
+    log: request.log,
+    userId: user.id,
+    sessionId: session.id,
+    username: user.username,
+    displayName: user.displayName,
+    timeZone,
+    stream,
+  };
+}
+
+async function result(deps: AppDeps, request: FastifyRequest, turn: TurnResult): Promise<AssistantReply> {
+  if (turn.signedOut) {
     await endSession(deps, authOf(request).session.id, 'upstream_signed_out', request.log);
-    throw new HttpError(401, 'session_expired', `Your ${deps.registry.signIn.name} sign-in has expired. Sign in again.`);
+    throw signInExpired(deps.registry);
   }
-  return { conversationId: result.conversationId, reply: result.reply, confirmation: result.confirmation };
+  return { conversationId: turn.conversationId, reply: turn.reply, confirmation: turn.confirmation, message: turn.message, title: turn.title };
 }

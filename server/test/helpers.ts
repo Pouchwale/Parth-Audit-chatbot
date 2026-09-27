@@ -2,13 +2,15 @@ import { randomBytes } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import type Groq from 'groq-sdk';
 import { z } from 'zod';
-import type { DeviceInfo, LoginResponse } from '@shared/api.ts';
-import type { Model, ModelRequest } from '../src/agent/model.ts';
+import type { DeviceInfo, LoginResponse, StreamEvent } from '@shared/api.ts';
+import type { Model, ModelOptions, ModelRequest } from '../src/agent/model.ts';
+import type { Titler } from '../src/agent/titles.ts';
 import { buildApp } from '../src/app.ts';
 import type { Config } from '../src/config.ts';
 import { createRegistry } from '../src/connectors/registry.ts';
 import { ConnectorError, defineAction, type Connector } from '../src/connectors/types.ts';
 import { openDatabase, type Database } from '../src/db/index.ts';
+import type { Recording } from '../src/voice/transcriber.ts';
 
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -23,6 +25,8 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     groqApiKey: undefined,
     model: 'test-model',
     reasoningEffort: '',
+    titleModel: 'test-title-model',
+    transcriptionModel: 'test-transcription-model',
     dcrsBaseUrl: undefined,
     trustProxy: false,
     corsOrigins: [],
@@ -43,13 +47,15 @@ export function fakeSystem() {
     ['13', { id: '13', title: 'Missing calibration label', status: 'open' }],
   ]);
   const calls: { action: string; credentials: unknown; input: unknown }[] = [];
-  const state = { acceptsSignIn: true };
+  // lookupRunning, when set, holds each lookup until it resolves.
+  const state: { acceptsSignIn: boolean; lookupRunning?: Promise<void> } = { acceptsSignIn: true };
   const passwords: Record<string, string> = { alice: 'alice-pw', bob: 'bob-pw', admin: 'admin-pw' };
 
   const connector: Connector = {
     id: 'fake',
     name: 'Fake Records',
     description: 'A test system with items.',
+    examples: ['What is open?', 'Close item 12'],
     actions: [
       defineAction({
         name: 'list_items',
@@ -59,6 +65,7 @@ export function fakeSystem() {
         describe: (input) => `List ${input.status ?? 'all'} items`,
         run: async (ctx, input) => {
           calls.push({ action: 'list_items', credentials: ctx.credentials, input });
+          await state.lookupRunning;
           if (!state.acceptsSignIn) throw new ConnectorError('unauthorized', 'Your Fake Records sign-in has expired.');
           return [...items.values()].filter((item) => !input.status || item.status === input.status);
         },
@@ -91,18 +98,18 @@ export function fakeSystem() {
   return { connector, items, calls, state };
 }
 
-type Step = (request: ModelRequest) => Groq.Chat.ChatCompletion;
+type Step = (request: ModelRequest, options: ModelOptions) => Groq.Chat.ChatCompletion | Promise<Groq.Chat.ChatCompletion>;
 let nextId = 0;
 
 /** Stands in for the model: returns queued responses in order and records every request. */
 export function scriptedModel() {
   const requests: ModelRequest[] = [];
   const steps: Step[] = [];
-  const model: Model = async (request) => {
+  const model: Model = async (request, options = {}) => {
     requests.push(structuredClone(request));
     const step = steps.shift();
     if (!step) throw new Error('The model was called more times than the test expected');
-    return step(request);
+    return step(request, options);
   };
   return { model, requests, queue: (...more: Step[]) => steps.push(...more) };
 }
@@ -111,13 +118,34 @@ export function says(text: string): Step {
   return () => completion({ role: 'assistant', content: text }, 'stop');
 }
 
+/** Writes its reply in pieces, the way the real model streams. */
+export function streams(...pieces: string[]): Step {
+  return (_request, { onText }) => {
+    for (const piece of pieces) onText?.(piece);
+    return completion({ role: 'assistant', content: pieces.join('') }, 'stop');
+  };
+}
+
+/** Writes part of a reply and then runs into the length limit. */
+export function cutOff(...pieces: string[]): Step {
+  return (_request, { onText }) => {
+    for (const piece of pieces) onText?.(piece);
+    return completion({ role: 'assistant', content: pieces.join('') }, 'length');
+  };
+}
+
 export function callsTool(name: string, input: Record<string, unknown>, text?: string): Step {
+  return callsTools([[name, input]], text);
+}
+
+/** One response that calls several tools. */
+export function callsTools(calls: [name: string, input: Record<string, unknown>][], text?: string): Step {
   return () =>
     completion(
       {
         role: 'assistant',
         content: text ?? null,
-        tool_calls: [{ id: `call_${++nextId}`, type: 'function', function: { name, arguments: JSON.stringify(input) } }],
+        tool_calls: calls.map(([name, input]) => ({ id: `call_${++nextId}`, type: 'function', function: { name, arguments: JSON.stringify(input) } })),
       },
       'tool_calls',
     );
@@ -129,7 +157,7 @@ export function fails(error: Error): Step {
   };
 }
 
-function completion(message: Groq.Chat.ChatCompletionMessage, finishReason: 'stop' | 'tool_calls'): Groq.Chat.ChatCompletion {
+function completion(message: Groq.Chat.ChatCompletionMessage, finishReason: 'stop' | 'tool_calls' | 'length'): Groq.Chat.ChatCompletion {
   return {
     id: `chatcmpl_${++nextId}`,
     object: 'chat.completion',
@@ -155,13 +183,29 @@ async function emptyDatabase(): Promise<Database> {
   return database;
 }
 
-export async function setup(overrides: Partial<Config> = {}) {
+/** Stands in for Whisper: records each recording and answers with `state.text`, or fails with `state.error`. */
+function fakeTranscriber() {
+  const recordings: Recording[] = [];
+  const state: { text: string; error?: Error } = { text: 'What is still open?' };
+  const transcriber = async (audio: Recording) => {
+    recordings.push(audio);
+    if (state.error) throw state.error;
+    return state.text;
+  };
+  return { recordings, state, transcriber };
+}
+
+export async function setup(overrides: Partial<Config> = {}, options: { titler?: Titler } = {}) {
   const config = testConfig(overrides);
   const database = await emptyDatabase();
   const system = fakeSystem();
   const scripted = scriptedModel();
+  const voice = fakeTranscriber();
   const registry = createRegistry([system.connector], 'fake');
-  const app = await buildApp({ config, db: database.db, registry, model: scripted.model }, { logger: false });
+  const app = await buildApp(
+    { config, db: database.db, registry, model: scripted.model, transcriber: voice.transcriber, ...options },
+    { logger: false },
+  );
 
   function login(username: string, options: LoginOptions = {}) {
     return app.inject({
@@ -196,6 +240,8 @@ export async function setup(overrides: Partial<Config> = {}) {
     return {
       get: (url: string) => app.inject({ method: 'GET', url, headers }),
       post: (url: string, payload?: object) => app.inject({ method: 'POST', url, headers, ...(payload ? { payload } : {}) }),
+      patch: (url: string, payload: object) => app.inject({ method: 'PATCH', url, headers, payload }),
+      delete: (url: string) => app.inject({ method: 'DELETE', url, headers }),
     };
   }
 
@@ -204,9 +250,29 @@ export async function setup(overrides: Partial<Config> = {}) {
     db: database.db,
     system,
     model: scripted,
+    voice,
     login,
     signIn,
     as,
     close: () => app.close(),
   };
+}
+
+/** The events in a server-sent event stream, in order, checking that each frame's event name matches its type. */
+export function parseEvents(payload: string): StreamEvent[] {
+  return payload
+    .split('\n\n')
+    .filter((frame) => frame.startsWith('event:'))
+    .map((frame) => {
+      const [name, data] = frame.split('\n');
+      const event = JSON.parse(data!.slice('data: '.length)) as StreamEvent;
+      if (name !== `event: ${event.type}`) throw new Error(`Frame "${name}" carries a ${event.type} event`);
+      return event;
+    });
+}
+
+export function findEvent<T extends StreamEvent['type']>(events: StreamEvent[], type: T): Extract<StreamEvent, { type: T }> {
+  const event = events.find((e): e is Extract<StreamEvent, { type: T }> => e.type === type);
+  if (!event) throw new Error(`The stream has no ${type} event`);
+  return event;
 }

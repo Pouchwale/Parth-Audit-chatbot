@@ -1,6 +1,6 @@
 import { boolean, index, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { Message, ToolMessage } from '../agent/model.ts';
-import type { ActionStatus, DeviceInfo } from '@shared/api.ts';
+import type { ActionStatus, ChatMessage, DeviceInfo } from '@shared/api.ts';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 
@@ -103,7 +103,8 @@ export interface PendingConfirmation {
   calls: PendingCall[];
 }
 
-// Working state for the agent: the full message history it sends to the model.
+// A conversation as the person sees it (transcript) and as the model works on it (messages: the full
+// history sent to the model). Every request saves the two together.
 export const conversations = pgTable(
   'conversations',
   {
@@ -112,6 +113,8 @@ export const conversations = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    title: text('title'),
+    transcript: jsonb('transcript').$type<ChatMessage[]>().notNull().default([]),
     messages: jsonb('messages').$type<Message[]>().notNull(),
     pending: jsonb('pending').$type<PendingConfirmation>(),
     lockedUntil: at('locked_until'),

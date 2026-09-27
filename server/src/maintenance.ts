@@ -21,8 +21,8 @@ export async function expireStaleWork(db: Db, config: Config, now = new Date()) 
     .set({ status: 'cancelled', error: 'The person did not confirm in time, so this change was not made.', finishedAt: now })
     .where(and(eq(actions.status, 'awaiting_confirmation'), lt(actions.createdAt, new Date(now.getTime() - config.confirmationTtlMs))));
 
-  // Conversations hold copies of data read from connected systems, so they are kept only briefly.
-  // The actions table is the lasting audit trail.
+  // Conversations hold copies of data read from connected systems, so they are deleted after the
+  // retention period (CONVERSATION_RETENTION_DAYS). The actions table is the lasting audit trail.
   await db
     .delete(conversations)
     .where(

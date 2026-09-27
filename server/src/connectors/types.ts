@@ -12,6 +12,8 @@ export interface Connector {
   /** One or two sentences telling the assistant what this system holds and when to use it. */
   description: string;
   actions: readonly Action[];
+  /** Two to four short requests people can try, shown on the app's welcome screen. */
+  examples?: readonly string[];
   /** Checks a person's username and password with this system and returns their account and credentials. */
   authenticate(username: string, password: string): Promise<ConnectorAccount>;
   /** Best-effort sign-out with the system when a session ends. */
