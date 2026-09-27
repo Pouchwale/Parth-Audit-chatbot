@@ -41,7 +41,8 @@
         {
           "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone so you can speak your requests."
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,

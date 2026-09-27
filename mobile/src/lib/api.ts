@@ -5,15 +5,21 @@ import type {
   AssistantReply,
   Capabilities,
   ConversationDetail,
+  ConversationExport,
   ConversationSummary,
   CurrentUser,
   DecisionRequest,
+  ExportDetail,
+  ExportPage,
+  ExportRequest,
   LoginRequest,
   LoginResponse,
   MessageRequest,
   RenameConversationRequest,
   SignInInfo,
   TranscriptionResponse,
+  WeeklyReport,
+  WeeklyReportSummary,
 } from '@shared/api';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
@@ -104,6 +110,23 @@ export function conversationPath(conversationId: string): string {
   return `/assistant/conversations/${encodeURIComponent(conversationId)}`;
 }
 
+/** Which downloads to list. All of them must match; leave one out to not filter by it. */
+export interface ExportFilters {
+  userId?: string;
+  /** An ISO date, meaning from the start of that day in the server's report time zone, or an ISO date-time. */
+  from?: string;
+  /** An ISO date, meaning to the end of that day in the server's report time zone, or an ISO date-time. */
+  to?: string;
+  /** An export ID, a fingerprint or its first 12 or more characters, or part of a title, file name or username. */
+  q?: string;
+}
+
+/** A query string of the parameters that have a value. */
+function query(params: Record<string, string | undefined>): string {
+  const entries = Object.entries(params).filter((entry): entry is [string, string] => Boolean(entry[1]));
+  return entries.length > 0 ? `?${new URLSearchParams(entries).toString()}` : '';
+}
+
 export const api = {
   signInInfo: () => request<SignInInfo>('/auth/provider'),
   login: (body: LoginRequest) => request<LoginResponse>('/auth/login', { method: 'POST', body }),
@@ -119,12 +142,23 @@ export const api = {
     request<ConversationSummary>(conversationPath(conversationId), { method: 'PATCH', body, token }),
   deleteConversation: (token: string, conversationId: string) => request<void>(conversationPath(conversationId), { method: 'DELETE', token }),
   deleteAllConversations: (token: string) => request<void>('/assistant/conversations', { method: 'DELETE', token }),
+  /** Builds the conversation's file for downloading. The server records every export. */
+  exportConversation: (token: string, conversationId: string, body: ExportRequest) =>
+    request<ConversationExport>(`${conversationPath(conversationId)}/export`, { method: 'POST', body, token }),
   /** `contentType` is the recording's type, e.g. audio/mp4 for an .m4a file or the Blob's type on web. */
   transcribe: (token: string, data: AudioData, contentType: string) =>
     request<TranscriptionResponse>('/assistant/transcribe', { method: 'POST', token, upload: { data, contentType } }),
   accounts: (token: string) => request<AccountSummary[]>('/admin/accounts', { token }),
   account: (token: string, userId: string) => request<AccountDetail>(`/admin/accounts/${userId}`, { token }),
   signOutDevice: (token: string, sessionId: string) => request<void>(`/admin/sessions/${sessionId}/revoke`, { method: 'POST', token }),
+  /** One page of downloads, newest first. `before` is the previous page's `nextBefore`. */
+  exports: (token: string, filters: ExportFilters, before?: string) =>
+    request<ExportPage>(`/admin/exports${query({ ...filters, before })}`, { token }),
+  exportDetail: (token: string, exportId: string) => request<ExportDetail>(`/admin/exports/${encodeURIComponent(exportId)}`, { token }),
+  /** The week in progress first, then completed weeks, newest first. */
+  weeklyReports: (token: string) => request<WeeklyReportSummary[]>('/admin/reports/weekly', { token }),
+  weeklyReport: (token: string, weekStart: string) =>
+    request<WeeklyReport>(`/admin/reports/weekly/${encodeURIComponent(weekStart)}`, { token }),
 };
 
 export function errorMessage(error: unknown): string {

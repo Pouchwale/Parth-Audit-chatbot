@@ -13,6 +13,7 @@ import { MAX_MESSAGE_LENGTH } from '@/lib/chat-stream';
 import { useConversations } from '@/lib/conversations';
 import { tapFeedback } from '@/lib/haptics';
 import { useSettings } from '@/lib/settings';
+import { useShareConversation } from '@/lib/share';
 import { speak, stopSpeaking, useReading } from '@/lib/speech';
 import { pendingConfirmation, spokenReply } from '@/lib/transcript';
 import { useVoiceInput } from '@/lib/voice';
@@ -21,6 +22,7 @@ import { ChatHeader } from './ChatHeader';
 import { Composer } from './Composer';
 import { HistoryError, HistorySkeleton } from './HistoryState';
 import { MessageList } from './MessageList';
+import { ShareNotice } from './ShareNotice';
 import { UnsentRequest } from './UnsentRequest';
 import { UserBubble } from './UserBubble';
 import { Welcome } from './Welcome';
@@ -39,6 +41,7 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
   const { settings } = useSettings();
   const { conversations, startNewChat } = useConversations();
   const reading = useReading();
+  const sharing = useShareConversation();
   const [draft, setDraft] = useState('');
 
   const busy = state.running !== null;
@@ -141,10 +144,17 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
   // The history list has the newest title, including a rename made there.
   const saved = conversations?.find((conversation) => conversation.id === state.conversationId);
   const title = saved?.title ?? state.title ?? (state.history.status === 'loading' ? '' : 'New chat');
+  // A reply still being written can be shared too: the file holds what the server has saved so far.
+  const shareableId = state.messages.length > 0 ? state.conversationId : null;
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: theme.background }]} edges={['top', 'left', 'right', 'bottom']}>
-      <ChatHeader title={title} onOpenMenu={() => navigation.openDrawer()} onNewChat={startNewChat} />
+      <ChatHeader
+        title={title}
+        onOpenMenu={() => navigation.openDrawer()}
+        onNewChat={startNewChat}
+        share={shareableId ? { busy: sharing.state.status === 'exporting', onPress: () => sharing.share(shareableId) } : null}
+      />
       <KeyboardAvoidingView behavior="padding" style={styles.body}>
         <View style={styles.column}>
           {content}
@@ -161,6 +171,7 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
             voice={voice}
             sendsVoice={settings.autoSendVoice}
           />
+          <ShareNotice state={sharing.state} onDismiss={sharing.reset} />
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>

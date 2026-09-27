@@ -6,9 +6,10 @@ import { Radius, Spacing, useTheme } from '@/constants/theme';
 import { conversationTitle } from '@/lib/format';
 
 /** What the person asked to do with a conversation: see the options, or go straight to one. */
-export type ConversationAction = 'menu' | 'rename' | 'delete';
+export type ConversationAction = 'menu' | 'share' | 'rename' | 'delete';
 
-const ACCESSIBILITY_ACTIONS = [
+const ACCESSIBILITY_ACTIONS: { name: Exclude<ConversationAction, 'menu'>; label: string }[] = [
+  { name: 'share', label: 'Share' },
   { name: 'rename', label: 'Rename' },
   { name: 'delete', label: 'Delete' },
 ];
@@ -38,7 +39,8 @@ export function ConversationRow({
         aria-selected={active}
         accessibilityActions={ACCESSIBILITY_ACTIONS}
         onAccessibilityAction={({ nativeEvent }) => {
-          if (nativeEvent.actionName === 'rename' || nativeEvent.actionName === 'delete') onAction(nativeEvent.actionName);
+          const action = ACCESSIBILITY_ACTIONS.find(({ name }) => name === nativeEvent.actionName);
+          if (action) onAction(action.name);
         }}
         onPress={onPress}
         onLongPress={() => onAction('menu')}

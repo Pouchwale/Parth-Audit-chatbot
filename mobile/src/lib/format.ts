@@ -1,4 +1,4 @@
-import type { ActionStatus, ConversationSummary, Role } from '@shared/api';
+import type { ActionStatus, ConversationSummary, ExportDevice, Role } from '@shared/api';
 
 export const ROLE_LABEL: Record<Role, string> = {
   user: 'Member',
@@ -49,4 +49,27 @@ const FAILURE_LABEL: Record<string, string> = {
 
 export function failureLabel(reason: string | null): string {
   return (reason && FAILURE_LABEL[reason]) ?? 'Failed';
+}
+
+/** e.g. "1 message", "3 messages". */
+export function count(amount: number, singular: string, plural = `${singular}s`): string {
+  return `${amount.toLocaleString()} ${amount === 1 ? singular : plural}`;
+}
+
+/** e.g. "812 B", "4.2 KB", "31 KB", "1.5 MB". */
+export function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const [size, unit] = bytes < 1024 * 1024 ? [bytes / 1024, 'KB'] : [bytes / (1024 * 1024), 'MB'];
+  return `${size < 10 ? size.toFixed(1) : Math.round(size)} ${unit}`;
+}
+
+/** The operating system and its version, e.g. "Android 15". */
+export function systemName(device: Pick<ExportDevice, 'os' | 'osVersion'>): string | null {
+  return [device.os, device.osVersion].filter(Boolean).join(' ') || null;
+}
+
+/** The device and its system in a line, e.g. "Parth's Pixel · Android 15". */
+export function deviceSummary(device: ExportDevice | null): string | null {
+  if (!device) return null;
+  return [device.name ?? device.model, systemName(device)].filter(Boolean).join(' · ') || null;
 }

@@ -5,13 +5,14 @@ import { useEffect, useState } from 'react';
 import { Keyboard, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { ConversationSummary } from '@shared/api';
+import { SearchField } from '@/components/SearchField';
 import { Radius, Spacing, useTheme } from '@/constants/theme';
 import { useConversations } from '@/lib/conversations';
+import { useShareConversation } from '@/lib/share';
 import { ConversationActions } from './ConversationActions';
 import { ConversationList } from './ConversationList';
 import type { ConversationAction } from './ConversationRow';
 import { DrawerFooter } from './DrawerFooter';
-import { SearchField } from './SearchField';
 
 const CHAT_PATH = /^\/chat\/([^/]+)$/;
 
@@ -26,6 +27,7 @@ export function ConversationDrawer({ navigation }: DrawerContentComponentProps) 
   const { refresh, startNewChat } = useConversations();
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<{ conversation: ConversationSummary; action: ConversationAction } | null>(null);
+  const sharing = useShareConversation();
 
   // Load up front so the list is ready, then again whenever the drawer opens.
   useEffect(() => {
@@ -51,9 +53,19 @@ export function ConversationDrawer({ navigation }: DrawerContentComponentProps) 
     close();
   }
 
-  function openScreen(href: '/settings' | '/admin') {
+  function openScreen(href: '/settings' | '/admin' | '/admin/security') {
     close();
     router.push(href);
+  }
+
+  function act(conversation: ConversationSummary, action: ConversationAction) {
+    setSelected({ conversation, action });
+    if (action === 'share') sharing.share(conversation.id);
+  }
+
+  function closeActions() {
+    setSelected(null);
+    sharing.reset();
   }
 
   function deleted(conversation: ConversationSummary) {
@@ -75,21 +87,21 @@ export function ConversationDrawer({ navigation }: DrawerContentComponentProps) 
         </View>
         <Text style={[styles.newChatLabel, { color: theme.text }]}>New chat</Text>
       </Pressable>
-      <SearchField value={query} onChangeText={setQuery} />
+      <SearchField label="Search chats" value={query} onChangeText={setQuery} style={styles.search} />
       <View style={styles.list}>
-        <ConversationList
-          query={query}
-          activeId={activeId}
-          onOpen={openConversation}
-          onAction={(conversation, action) => setSelected({ conversation, action })}
-        />
+        <ConversationList query={query} activeId={activeId} onOpen={openConversation} onAction={act} />
       </View>
-      <DrawerFooter onOpenSettings={() => openScreen('/settings')} onOpenAccounts={() => openScreen('/admin')} />
+      <DrawerFooter
+        onOpenSettings={() => openScreen('/settings')}
+        onOpenAccounts={() => openScreen('/admin')}
+        onOpenSecurity={() => openScreen('/admin/security')}
+      />
       {selected ? (
         <ConversationActions
           conversation={selected.conversation}
           action={selected.action}
-          onClose={() => setSelected(null)}
+          sharing={sharing}
+          onClose={closeActions}
           onDeleted={() => deleted(selected.conversation)}
         />
       ) : null}
@@ -112,5 +124,6 @@ const styles = StyleSheet.create({
   },
   newChatIcon: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   newChatLabel: { fontSize: 15, fontWeight: '600' },
+  search: { marginHorizontal: Spacing.md },
   list: { flex: 1, overflow: 'hidden' },
 });

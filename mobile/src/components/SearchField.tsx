@@ -1,22 +1,36 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View, type ViewStyle } from 'react-native';
 import { Radius, Spacing, useColorSchemeSetting, useTheme } from '@/constants/theme';
 
-export function SearchField({ value, onChangeText }: { value: string; onChangeText(text: string): void }) {
+/** A search box with a clear button. `label` is its placeholder and what screen readers call it. */
+export function SearchField({
+  label,
+  value,
+  onChangeText,
+  maxLength,
+  style,
+}: {
+  label: string;
+  value: string;
+  onChangeText(text: string): void;
+  maxLength?: number;
+  style?: ViewStyle;
+}) {
   const theme = useTheme();
   const scheme = useColorSchemeSetting();
   return (
-    <View style={[styles.box, { backgroundColor: theme.surfaceMuted }]}>
+    <View style={[styles.box, { backgroundColor: theme.surfaceMuted }, style]}>
       <Ionicons name="search" size={16} color={theme.textSecondary} />
       <TextInput
         value={value}
         onChangeText={onChangeText}
-        placeholder="Search chats"
+        placeholder={label}
         placeholderTextColor={theme.textSecondary}
-        accessibilityLabel="Search chats"
+        accessibilityLabel={label}
         autoCapitalize="none"
         autoCorrect={false}
         returnKeyType="search"
+        maxLength={maxLength}
         keyboardAppearance={scheme}
         style={[styles.input, { color: theme.text }]}
       />
@@ -35,7 +49,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.sm,
     minHeight: 40,
-    marginHorizontal: Spacing.md,
     paddingHorizontal: Spacing.md,
     borderRadius: Radius.md,
   },

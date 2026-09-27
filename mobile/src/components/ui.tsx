@@ -18,6 +18,8 @@ import { Radius, Spacing, useColorSchemeSetting, useTheme } from '@/constants/th
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
+export const ICON_BUTTON_SIZE = 40;
+
 export function Button({
   title,
   onPress,
@@ -55,16 +57,32 @@ export function Button({
   );
 }
 
-export function IconButton({ icon, label, onPress, color }: { icon: IconName; label: string; onPress(): void; color?: string }) {
+export function IconButton({
+  icon,
+  label,
+  onPress,
+  color,
+  busy = false,
+}: {
+  icon: IconName;
+  label: string;
+  onPress(): void;
+  color?: string;
+  /** Working on it: shows a spinner and ignores presses. */
+  busy?: boolean;
+}) {
   const theme = useTheme();
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      aria-busy={busy}
+      aria-disabled={busy}
+      disabled={busy}
       onPress={onPress}
       hitSlop={8}
       style={({ pressed }) => [styles.iconButton, { backgroundColor: pressed ? theme.surfaceMuted : 'transparent' }]}>
-      <Ionicons name={icon} size={22} color={color ?? theme.text} />
+      {busy ? <ActivityIndicator size="small" color={theme.textSecondary} /> : <Ionicons name={icon} size={22} color={color ?? theme.text} />}
     </Pressable>
   );
 }
@@ -238,7 +256,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   buttonText: { fontSize: 16, fontWeight: '600' },
-  iconButton: { width: 40, height: 40, borderRadius: Radius.pill, alignItems: 'center', justifyContent: 'center' },
+  iconButton: { width: ICON_BUTTON_SIZE, height: ICON_BUTTON_SIZE, borderRadius: Radius.pill, alignItems: 'center', justifyContent: 'center' },
   field: { gap: Spacing.xs },
   fieldLabel: { fontSize: 13, fontWeight: '600' },
   fieldBox: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: Radius.md },

@@ -11,6 +11,7 @@ import { useConfirm } from '@/lib/confirm';
 import { useConversations } from '@/lib/conversations';
 import { ROLE_LABEL } from '@/lib/format';
 import { useSettings, type AppearancePreference, type ReadAloudPreference } from '@/lib/settings';
+import { DOWNLOADS_RECORDED } from '@/lib/share';
 
 const APPEARANCE_OPTIONS: readonly { value: AppearancePreference; label: string }[] = [
   { value: 'system', label: 'System' },
@@ -70,6 +71,9 @@ export default function SettingsScreen() {
       </Card>
 
       <SectionTitle>History</SectionTitle>
+      <Text style={[styles.hint, styles.historyHint, { color: theme.textSecondary }]}>
+        Share a chat from the top of the chat or its menu in the chat list to download it. {DOWNLOADS_RECORDED}
+      </Text>
       <DeleteHistory />
 
       <SectionTitle>About</SectionTitle>
@@ -197,6 +201,7 @@ const styles = StyleSheet.create({
   column: { flex: 1, gap: Spacing.xs },
   label: { fontSize: 16, fontWeight: '500' },
   hint: { fontSize: 13, lineHeight: 18 },
+  historyHint: { marginBottom: Spacing.sm },
   divider: { height: StyleSheet.hairlineWidth, marginVertical: Spacing.xs },
   radioRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, minHeight: 44 },
   radioLabel: { fontSize: 15 },

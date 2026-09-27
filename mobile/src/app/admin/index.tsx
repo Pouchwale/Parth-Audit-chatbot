@@ -52,17 +52,38 @@ export default function AccountsScreen() {
       contentContainerStyle={styles.list}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
       ListHeaderComponent={
-        error ? (
-          <Notice tone="danger">{error}</Notice>
-        ) : (
-          <Text style={[styles.intro, { color: theme.textSecondary }]}>
-            Where each account is signed in right now, and what it last did. Pull down to refresh.
-          </Text>
-        )
+        <View style={styles.header}>
+          <SecurityLink />
+          {error ? (
+            <Notice tone="danger">{error}</Notice>
+          ) : (
+            <Text style={[styles.intro, { color: theme.textSecondary }]}>
+              Where each account is signed in right now, and what it last did. Pull down to refresh.
+            </Text>
+          )}
+        </View>
       }
       ListEmptyComponent={<Text style={[styles.intro, { color: theme.textSecondary }]}>No one has signed in yet.</Text>}
       renderItem={({ item }) => <AccountRow account={item} />}
     />
+  );
+}
+
+function SecurityLink() {
+  const theme = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityHint="Opens the security dashboard"
+      onPress={() => router.push('/admin/security')}
+      style={({ pressed }) => [styles.row, styles.rowTop, { backgroundColor: theme.surface, borderColor: theme.border, opacity: pressed ? 0.85 : 1 }]}>
+      <Ionicons name="shield-checkmark-outline" size={24} color={theme.accent} />
+      <View style={styles.flex}>
+        <Text style={[styles.name, { color: theme.text }]}>Security</Text>
+        <Text style={[styles.meta, { color: theme.textSecondary }]}>Who downloaded which conversation, and weekly reports</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={theme.textSecondary} />
+    </Pressable>
   );
 }
 
@@ -111,6 +132,7 @@ function AccountRow({ account }: { account: AccountSummary }) {
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   list: { padding: Spacing.lg, gap: Spacing.md, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center' },
+  header: { gap: Spacing.md },
   intro: { fontSize: 14, lineHeight: 20, marginBottom: Spacing.xs },
   row: { borderWidth: 1, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.sm },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },

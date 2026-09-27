@@ -61,6 +61,9 @@ function Screens() {
         <Stack.Protected guard={user?.role === 'super_admin'}>
           <Stack.Screen name="admin/index" options={{ title: 'Accounts' }} />
           <Stack.Screen name="admin/[userId]" options={{ title: 'Account' }} />
+          <Stack.Screen name="admin/security" options={{ title: 'Security' }} />
+          <Stack.Screen name="admin/exports/[exportId]" options={{ title: 'Download' }} />
+          <Stack.Screen name="admin/reports/[weekStart]" options={{ title: 'Weekly report' }} />
         </Stack.Protected>
       </Stack.Protected>
       <Stack.Protected guard={status === 'signedOut'}>

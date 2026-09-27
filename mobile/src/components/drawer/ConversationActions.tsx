@@ -1,42 +1,54 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState, type ComponentProps } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { ConversationSummary } from '@shared/api';
 import { Button, Dialog, Field, Notice } from '@/components/ui';
 import { Radius, Spacing, useTheme } from '@/constants/theme';
 import { errorMessage } from '@/lib/api';
 import { useConversations } from '@/lib/conversations';
 import { conversationTitle } from '@/lib/format';
+import { DOWNLOADS_RECORDED, type ShareConversation, type ShareState } from '@/lib/share';
 import type { ConversationAction } from './ConversationRow';
 
 const MAX_TITLE_LENGTH = 100;
 
 /**
- * Options, rename and delete for one conversation. Everything happens in one dialog: stacking a
- * second modal or an alert while one is closing is unreliable on iOS.
+ * Options, share, rename and delete for one conversation. Everything happens in one dialog: stacking a
+ * second modal or an alert while one is closing is unreliable on iOS. The phone's share sheet opens over it.
  */
 export function ConversationActions({
   conversation,
   action,
+  sharing,
   onClose,
   onDeleted,
 }: {
   conversation: ConversationSummary;
   action: ConversationAction;
+  /** Started by whoever opens this dialog to share straight away, and by the Share option. */
+  sharing: ShareConversation;
   onClose(): void;
   onDeleted(): void;
 }) {
   const [step, setStep] = useState(action);
   const title = conversationTitle(conversation);
-  const heading = { menu: title, rename: 'Rename chat', delete: 'Delete chat?' }[step];
+  const heading = { menu: title, share: 'Share chat', rename: 'Rename chat', delete: 'Delete chat?' }[step];
+
+  function share() {
+    setStep('share');
+    sharing.share(conversation.id);
+  }
 
   return (
     <Dialog title={heading} onClose={onClose}>
       {step === 'menu' ? (
         <View>
+          <MenuItem icon="share-outline" label="Share" onPress={share} />
           <MenuItem icon="create-outline" label="Rename" onPress={() => setStep('rename')} />
           <MenuItem icon="trash-outline" label="Delete" danger onPress={() => setStep('delete')} />
         </View>
+      ) : step === 'share' ? (
+        <ShareProgress title={title} state={sharing.state} onRetry={() => sharing.share(conversation.id)} onClose={onClose} />
       ) : step === 'rename' ? (
         <RenameForm conversation={conversation} onDone={onClose} onCancel={onClose} />
       ) : (
@@ -67,6 +79,43 @@ function MenuItem({
       <Ionicons name={icon} size={20} color={color} />
       <Text style={[styles.menuLabel, { color }]}>{label}</Text>
     </Pressable>
+  );
+}
+
+/** The file being prepared (the share sheet opens over this on phones), then how it went. */
+function ShareProgress({ title, state, onRetry, onClose }: { title: string; state: ShareState; onRetry(): void; onClose(): void }) {
+  const theme = useTheme();
+  if (state.status === 'failed') {
+    return (
+      <>
+        <View accessibilityRole="alert">
+          <Notice tone="danger">{state.error}</Notice>
+        </View>
+        <View style={styles.buttons}>
+          <Button title="Close" kind="secondary" onPress={onClose} style={styles.flex} />
+          {state.retryable ? <Button title="Try again" onPress={onRetry} style={styles.flex} /> : null}
+        </View>
+      </>
+    );
+  }
+  if (state.status === 'done') {
+    return (
+      <>
+        <View accessibilityRole="alert" style={styles.status}>
+          <Ionicons name="checkmark-circle" size={22} color={theme.success} />
+          <Text style={[styles.message, styles.flex, { color: theme.text }]}>{state.message}</Text>
+        </View>
+        <Button title="Done" onPress={onClose} />
+      </>
+    );
+  }
+  return (
+    <View accessibilityLiveRegion="polite" style={styles.status}>
+      <ActivityIndicator color={theme.accent} />
+      <Text style={[styles.message, styles.flex, { color: theme.textSecondary }]}>
+        Preparing “{title}”. {DOWNLOADS_RECORDED}
+      </Text>
+    </View>
   );
 }
 
@@ -165,6 +214,7 @@ const styles = StyleSheet.create({
   },
   menuLabel: { fontSize: 16 },
   message: { fontSize: 15, lineHeight: 22 },
+  status: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, minHeight: 48 },
   buttons: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.xs },
   flex: { flex: 1 },
 });
