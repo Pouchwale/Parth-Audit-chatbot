@@ -18,8 +18,13 @@ async function serverUp() {
   }
 }
 
+// The app looks for the server on port 3000 and serves itself on 8081, so pin both: a PORT set by
+// whatever launched this script (a preview tool, a hosting shell) must not move either of them.
+const { PORT: _ignored, ...inherited } = process.env;
+const ENV = { ...inherited, PORT: '3000', RCT_METRO_PORT: '8081' };
+
 function start(name, command) {
-  const child = spawn(command, { stdio: 'inherit', shell: true });
+  const child = spawn(command, { stdio: 'inherit', shell: true, env: ENV });
   running.push(child);
   child.on('exit', () => {
     // Give a Ctrl+C a moment to arrive, so pressing it isn't reported as a crash.
