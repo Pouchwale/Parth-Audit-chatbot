@@ -1,4 +1,14 @@
-import type { ActionStatus } from '@shared/api';
+import type { ActionStatus, ConversationSummary, Role } from '@shared/api';
+
+export const ROLE_LABEL: Record<Role, string> = {
+  user: 'Member',
+  super_admin: 'Super admin',
+};
+
+/** A conversation's name in lists: its title, or until it gets one, the start of its latest message. */
+export function conversationTitle(conversation: ConversationSummary): string {
+  return conversation.title || conversation.preview || 'New chat';
+}
 
 export function timeAgo(iso: string | null, now = Date.now()): string {
   if (!iso) return 'never';

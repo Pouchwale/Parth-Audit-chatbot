@@ -1,7 +1,20 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState, type ComponentProps, type ReactNode } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
-import { Radius, Spacing, useTheme } from '@/constants/theme';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  View,
+  type TextInputProps,
+  type ViewStyle,
+} from 'react-native';
+import { Radius, Spacing, useColorSchemeSetting, useTheme } from '@/constants/theme';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -59,6 +72,7 @@ export function IconButton({ icon, label, onPress, color }: { icon: IconName; la
 /** A labelled text input. `secret` hides the text and adds an eye button to show it. */
 export function Field({ label, secret, ...input }: TextInputProps & { label: string; secret?: boolean }) {
   const theme = useTheme();
+  const scheme = useColorSchemeSetting();
   const [revealed, setRevealed] = useState(false);
   return (
     <View style={styles.field}>
@@ -66,6 +80,7 @@ export function Field({ label, secret, ...input }: TextInputProps & { label: str
       <View style={[styles.fieldBox, { backgroundColor: theme.surface, borderColor: theme.border }]}>
         <TextInput
           placeholderTextColor={theme.textSecondary}
+          keyboardAppearance={scheme}
           {...input}
           secureTextEntry={secret ? !revealed : input.secureTextEntry}
           accessibilityLabel={label}
@@ -124,6 +139,95 @@ export function Notice({ children, tone = 'warning' }: { children: ReactNode; to
   );
 }
 
+/** A round badge with the first letter of the person's name. */
+export function Avatar({ name, size = 36 }: { name: string; size?: number }) {
+  const theme = useTheme();
+  const initial = Array.from(name.trim())[0]?.toUpperCase() ?? '?';
+  return (
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={[styles.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: theme.accentSoft }]}>
+      <Text style={[styles.avatarText, { color: theme.accent, fontSize: Math.round(size * 0.42) }]}>{initial}</Text>
+    </View>
+  );
+}
+
+export function SegmentedControl<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  /** Read by screen readers for the whole group. */
+  label: string;
+  options: readonly { value: T; label: string }[];
+  value: T;
+  onChange(value: T): void;
+}) {
+  const theme = useTheme();
+  return (
+    <View accessibilityRole="radiogroup" accessibilityLabel={label} style={[styles.segments, { backgroundColor: theme.surfaceMuted }]}>
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            accessibilityRole="radio"
+            aria-checked={selected}
+            onPress={() => onChange(option.value)}
+            style={[styles.segment, selected && { backgroundColor: theme.accentSoft }]}>
+            <Text style={[styles.segmentText, { color: selected ? theme.accent : theme.textSecondary }]}>{option.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+const THUMB_COLOR = '#FFFFFF';
+// react-native-web colours the thumb of a switched-on Switch from this prop of its own.
+const webThumbColor = Platform.OS === 'web' ? { activeThumbColor: THUMB_COLOR } : null;
+
+/** An on/off switch that looks the same on iOS, Android and web. */
+export function Toggle({ label, value, onValueChange }: { label: string; value: boolean; onValueChange(value: boolean): void }) {
+  const theme = useTheme();
+  return (
+    <Switch
+      accessibilityLabel={label}
+      value={value}
+      onValueChange={onValueChange}
+      trackColor={{ true: theme.accent, false: theme.border }}
+      ios_backgroundColor={theme.border}
+      thumbColor={THUMB_COLOR}
+      {...webThumbColor}
+    />
+  );
+}
+
+/** A small modal card over a dimmed backdrop, shown while it is mounted. Tapping outside closes it. */
+export function Dialog({ title, onClose, children }: { title: string; onClose(): void; children: ReactNode }) {
+  const theme = useTheme();
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior="padding" style={styles.dialogRoot}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+          onPress={onClose}
+          style={[StyleSheet.absoluteFill, { backgroundColor: theme.overlay }]}
+        />
+        <View aria-modal style={[styles.dialog, { backgroundColor: theme.surface }]}>
+          <Text accessibilityRole="header" numberOfLines={2} style={[styles.dialogTitle, { color: theme.text }]}>
+            {title}
+          </Text>
+          {children}
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   button: {
     minHeight: 48,
@@ -152,4 +256,12 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   notice: { borderRadius: Radius.md, padding: Spacing.md },
+  avatar: { alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontWeight: '700' },
+  segments: { flexDirection: 'row', borderRadius: Radius.md, padding: 3, gap: 3 },
+  segment: { flex: 1, minHeight: 36, borderRadius: Radius.sm, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.sm },
+  segmentText: { fontSize: 14, fontWeight: '600' },
+  dialogRoot: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.lg },
+  dialog: { width: '100%', maxWidth: 400, borderRadius: Radius.lg, padding: Spacing.xl, gap: Spacing.md },
+  dialogTitle: { fontSize: 18, fontWeight: '700' },
 });

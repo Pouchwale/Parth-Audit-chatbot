@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { CurrentUser } from '@shared/api';
 import { api, ApiError } from './api';
 import { deviceInfo } from './device';
@@ -24,8 +24,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // The token of the sign-in in use. A request still running for one that has ended, because the person signed
+  // out meanwhile, expects its 401: that must not say their session ended, or sign out whoever is signed in now.
+  const current = useRef<string | null>(null);
 
   const forget = useCallback(async (reason: string | null) => {
+    current.current = null;
     await Promise.all([deleteItem('token'), deleteItem('user')]);
     setToken(null);
     setUser(null);
@@ -47,6 +51,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!savedUser) return forget(null);
         setUser(JSON.parse(savedUser) as CurrentUser);
       }
+      current.current = savedToken;
       setToken(savedToken);
       setStatus('signedIn');
     })();
@@ -55,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(async (username: string, password: string) => {
     const result = await api.login({ username, password, device: await deviceInfo() });
     await Promise.all([setItem('token', result.token), setItem('user', JSON.stringify(result.user))]);
+    current.current = result.token;
     setToken(result.token);
     setUser(result.user);
     setNotice(null);
@@ -62,17 +68,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    current.current = null;
     if (token) await api.logout(token).catch(() => undefined);
     await forget(null);
   }, [token, forget]);
 
   const call = useCallback(
     async <T,>(request: (token: string) => Promise<T>): Promise<T> => {
-      if (!token) throw new ApiError(401, 'unauthenticated', 'Sign in to continue.');
+      if (!token || token !== current.current) throw new ApiError(401, 'unauthenticated', 'Sign in to continue.');
       try {
         return await request(token);
       } catch (error) {
-        if (error instanceof ApiError && error.status === 401) await forget(error.message);
+        if (error instanceof ApiError && error.status === 401 && token === current.current) await forget(error.message);
         throw error;
       }
     },

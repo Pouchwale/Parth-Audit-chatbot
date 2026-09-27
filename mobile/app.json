@@ -37,11 +37,9 @@
       ],
       "expo-secure-store",
       [
-        "expo-speech-recognition",
+        "expo-audio",
         {
-          "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone so you can speak your requests.",
-          "speechRecognitionPermission": "Allow $(PRODUCT_NAME) to turn your speech into text so you can speak your requests.",
-          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+          "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone so you can speak your requests."
         }
       ]
     ],

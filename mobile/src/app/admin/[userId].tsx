@@ -7,13 +7,14 @@ import { Button, Card, Chip, Notice, SectionTitle } from '@/components/ui';
 import { MaxContentWidth, Spacing, useTheme } from '@/constants/theme';
 import { api, errorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { confirmAsync } from '@/lib/confirm';
+import { useConfirm } from '@/lib/confirm';
 import { dateTime, failureLabel, STATUS_LABEL, statusTone, timeAgo } from '@/lib/format';
 
 export default function AccountScreen() {
   const { userId } = useLocalSearchParams<{ userId: string }>();
   const theme = useTheme();
   const { call } = useAuth();
+  const ask = useConfirm();
   const [detail, setDetail] = useState<AccountDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -39,7 +40,7 @@ export default function AccountScreen() {
   }
 
   async function signOutDevice(session: SessionEntry) {
-    const confirmed = await confirmAsync(
+    const confirmed = await ask(
       'Sign out this device?',
       `${detail?.account.displayName ?? 'This account'} will be signed out on ${deviceTitle(session)} and will have to sign in again there.`,
       'Sign out',

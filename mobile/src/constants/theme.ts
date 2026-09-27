@@ -1,46 +1,80 @@
+import { DarkTheme, DefaultTheme, type Theme as NavigationTheme } from 'expo-router';
 import { useColorScheme } from 'react-native';
+import { useSettings } from '@/lib/settings';
 
+// Warm neutrals with a single clay accent: calm and content-first.
 export const Colors = {
   light: {
-    text: '#11181C',
-    textSecondary: '#5F6B7A',
-    background: '#F4F6F9',
+    text: '#1F1E1D',
+    textSecondary: '#6B6962',
+    background: '#FAF9F5',
+    sidebar: '#F3F1EA',
     surface: '#FFFFFF',
-    surfaceMuted: '#EBEFF4',
-    border: '#DDE3EA',
-    accent: '#2F5BEA',
+    surfaceMuted: '#EFEDE5',
+    border: '#E3E0D6',
+    overlay: 'rgba(31, 30, 29, 0.4)',
+    accent: '#B8532F',
     onAccent: '#FFFFFF',
-    accentSoft: '#E5EBFD',
-    danger: '#C62828',
-    dangerSoft: '#FDECEC',
-    success: '#1E7F4F',
-    successSoft: '#E3F3EA',
+    accentSoft: '#F5E4DB',
+    danger: '#B42318',
+    dangerSoft: '#FCEAE8',
+    success: '#2E7A4E',
+    successSoft: '#E3F1E7',
     warning: '#8A5A00',
-    warningSoft: '#FFF3D6',
+    warningSoft: '#FAEFD6',
   },
   dark: {
-    text: '#ECEEF1',
-    textSecondary: '#9BA5B1',
-    background: '#0D1015',
-    surface: '#171B22',
-    surfaceMuted: '#20252D',
-    border: '#2B323C',
-    accent: '#7B97FF',
-    onAccent: '#0B0F17',
-    accentSoft: '#1C2544',
-    danger: '#FF7070',
-    dangerSoft: '#3A1D20',
-    success: '#4CC38A',
-    successSoft: '#143020',
-    warning: '#F5BE4F',
-    warningSoft: '#372B10',
+    text: '#F4F3EE',
+    textSecondary: '#A8A59C',
+    background: '#262624',
+    sidebar: '#1F1E1D',
+    surface: '#30302E',
+    surfaceMuted: '#3A3936',
+    border: '#44433F',
+    overlay: 'rgba(0, 0, 0, 0.55)',
+    accent: '#D97757',
+    onAccent: '#1F1E1D',
+    accentSoft: '#48302A',
+    danger: '#FF8A7F',
+    dangerSoft: '#46231F',
+    success: '#6CC790',
+    successSoft: '#1F3527',
+    warning: '#F0BF5E',
+    warningSoft: '#3E3219',
   },
 } as const;
 
-export type Theme = (typeof Colors)['light'] | (typeof Colors)['dark'];
+export type ColorScheme = keyof typeof Colors;
+export type Theme = (typeof Colors)[ColorScheme];
+
+/** The scheme the app shows: the person's choice in Settings, or the device's when they chose System. */
+export function useColorSchemeSetting(): ColorScheme {
+  const device = useColorScheme();
+  const { appearance } = useSettings().settings;
+  if (appearance !== 'system') return appearance;
+  return device === 'dark' ? 'dark' : 'light';
+}
 
 export function useTheme(): Theme {
-  return useColorScheme() === 'dark' ? Colors.dark : Colors.light;
+  return Colors[useColorSchemeSetting()];
+}
+
+/** Colours for navigation headers, drawers and screen backgrounds. */
+export function navigationTheme(scheme: ColorScheme): NavigationTheme {
+  const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
+  const colors = Colors[scheme];
+  return {
+    ...base,
+    colors: {
+      ...base.colors,
+      primary: colors.accent,
+      background: colors.background,
+      card: colors.background,
+      text: colors.text,
+      border: colors.border,
+      notification: colors.accent,
+    },
+  };
 }
 
 export const Spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
