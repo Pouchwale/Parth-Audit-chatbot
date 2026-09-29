@@ -15,7 +15,10 @@ import { periodFilters, type Period } from './periods';
 const SEARCH_DELAY_MS = 350;
 const MAX_SEARCH_LENGTH = 200;
 
-/** Every conversation download, newest first: searchable, filtered by person and period, loaded as it scrolls. */
+/**
+ * Every download, of conversations and of files from connected systems, newest first: searchable, filtered by person
+ * and period, loaded as it scrolls.
+ */
 export function DownloadsTab({ initialPersonId, initialPeriod }: { initialPersonId: string | null; initialPeriod: Period }) {
   const theme = useTheme();
   const [text, setText] = useState('');
@@ -40,7 +43,7 @@ export function DownloadsTab({ initialPersonId, initialPeriod }: { initialPerson
   return (
     <View style={styles.tab}>
       <View style={styles.controls}>
-        <SearchField label="Export ID, fingerprint, title or username" value={text} onChangeText={setText} maxLength={MAX_SEARCH_LENGTH} />
+        <SearchField label="Export ID, fingerprint, title, file name or username" value={text} onChangeText={setText} maxLength={MAX_SEARCH_LENGTH} />
         <DownloadFilters personId={personId} onPersonChange={setPersonId} period={period} onPeriodChange={setPeriod} />
       </View>
       <FlatList
@@ -88,7 +91,9 @@ function ListState({ downloads, filtered }: { downloads: Downloads; filtered: bo
       <Ionicons name={filtered ? 'search' : 'download-outline'} size={28} color={theme.textSecondary} />
       <Text style={[styles.emptyTitle, { color: theme.text }]}>{filtered ? 'No matching downloads' : 'No downloads yet'}</Text>
       <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-        {filtered ? 'Try another search, person or period.' : 'When someone shares a conversation, it shows up here.'}
+        {filtered
+          ? 'Try another search, person or period.'
+          : 'When someone shares a conversation, or opens, downloads or shares a file from a connected system, it shows up here.'}
       </Text>
     </View>
   );

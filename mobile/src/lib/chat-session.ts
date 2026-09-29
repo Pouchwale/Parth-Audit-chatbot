@@ -1,4 +1,4 @@
-import type { AssistantMessage, AssistantReply, ChatMessage, ConversationDetail, UserMessage } from '@shared/api';
+import type { AssistantMessage, AssistantReply, ChatMessage, ConversationDetail, FileInfo, UserMessage } from '@shared/api';
 import { api, ApiError, errorMessage } from './api';
 import { streamChat, type ChatRequest, type ProgressEvent } from './chat-stream';
 import { appendText, setPart, withoutWaiting } from './transcript';
@@ -122,8 +122,8 @@ export class ChatSession {
     void this.fetchHistory();
   }
 
-  send(text: string, spoken: boolean): void {
-    void this.run({ kind: 'message', conversationId: this.state.conversationId ?? undefined, text }, spoken);
+  send(text: string, spoken: boolean, attachments: FileInfo[]): void {
+    void this.run({ kind: 'message', conversationId: this.state.conversationId ?? undefined, text, attachments }, spoken);
   }
 
   decide(confirmationId: string, decision: 'confirm' | 'cancel', spoken: boolean): void {
@@ -192,7 +192,7 @@ export class ChatSession {
     if (request.kind === 'message') {
       const id = ++localIds;
       const createdAt = new Date().toISOString();
-      const user: UserMessage = { id: `local-user-${id}`, role: 'user', text: request.text, createdAt };
+      const user: UserMessage = { id: `local-user-${id}`, role: 'user', text: request.text, attachments: request.attachments, createdAt };
       const reply: AssistantMessage = { id: `local-reply-${id}`, role: 'assistant', parts: [], status: 'streaming', error: null, createdAt };
       attempt.localUserId = user.id;
       this.writing = reply.id;

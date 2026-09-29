@@ -42,7 +42,14 @@
           "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone so you can speak your requests."
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow $(PRODUCT_NAME) to use your photos so you can attach them to your requests.",
+          "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera so you can attach photos to your requests."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

@@ -1,6 +1,6 @@
 import type { AudioRecorder } from 'expo-audio';
 import { File } from 'expo-file-system';
-import type { AudioData } from './api';
+import type { FileData } from './api';
 
 // Phones record AAC in an .m4a file (see voice.ts). The web version of this module reads the browser's recording.
 
@@ -10,7 +10,7 @@ export function recordingFile(recorder: AudioRecorder): string | null {
 }
 
 /** A finished recording's bytes and type, ready to upload. */
-export async function readRecording(uri: string): Promise<{ data: AudioData; contentType: string }> {
+export async function readRecording(uri: string): Promise<{ data: FileData; contentType: string }> {
   return { data: await new File(uri).bytes(), contentType: 'audio/mp4' };
 }
 

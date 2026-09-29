@@ -6,6 +6,7 @@ import { messageText } from '@/lib/transcript';
 import { ActivityRow } from './ActivityRow';
 import { AssistantMark } from './AssistantMark';
 import { ConfirmationCard } from './ConfirmationCard';
+import { FileCard } from './FileCard';
 import { InlineError } from './InlineError';
 import { Markdown } from './Markdown';
 import { MessageActions } from './MessageActions';
@@ -13,7 +14,7 @@ import { Thinking } from './Thinking';
 
 type Decision = 'confirm' | 'cancel';
 
-/** A reply from the assistant: full-width text, lookups and confirmation cards, then its status and actions. */
+/** A reply from the assistant: full-width text, lookups, confirmation cards and files, then its status and actions. */
 export function AssistantResponse({
   message,
   answerableId,
@@ -58,6 +59,8 @@ export function AssistantResponse({
             onDecide={(decision) => onDecide(part.id, decision)}
           />
         );
+      case 'file':
+        return <FileCard key={`file-${part.file.id}`} file={part.file} />;
     }
   }
 

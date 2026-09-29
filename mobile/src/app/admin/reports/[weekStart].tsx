@@ -104,6 +104,7 @@ function Totals({ totals }: { totals: WeeklyTotals }) {
       <StatTile label="Active people" value={totals.activeUsers.toLocaleString()} />
       <StatTile label="Messages" value={totals.messages.toLocaleString()} />
       <StatTile label="Lookups" value={totals.lookups.toLocaleString()} />
+      <StatTile label="Uploads" value={totals.uploads.toLocaleString()} />
       <StatTile label="Changes made" value={totals.changesConfirmed.toLocaleString()} />
       <StatTile label="Sign-ins" value={totals.signIns.toLocaleString()} />
       <StatTile label="Failed sign-ins" value={totals.failedSignIns.toLocaleString()} alarming={totals.failedSignIns > 0} />

@@ -2,24 +2,30 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { ExportEntry } from '@shared/api';
-import { Avatar } from '@/components/ui';
+import type { ExportEntry, FilePurpose } from '@shared/api';
+import { Avatar, Chip, type Tone } from '@/components/ui';
 import { Radius, Spacing, useTheme } from '@/constants/theme';
 import { fullDateTime } from '@/lib/dates';
 import { WEB_BROWSER_MODEL } from '@/lib/device';
-import { deviceSummary, fileSize } from '@/lib/format';
+import { deviceSummary, downloadKind, fileSize, PURPOSE_LABEL } from '@/lib/format';
 
-/** One download in the list: who, which conversation, exactly when, from which device and address. */
+// Sharing sends a file on to other apps, the furthest it can go.
+const PURPOSE_TONE: Record<FilePurpose, Tone> = { open: 'neutral', download: 'accent', share: 'warning' };
+
+/** One download in the list: who, what and how, exactly when, from which device and address. */
 export function DownloadRow({ entry }: { entry: ExportEntry }) {
   const theme = useTheme();
   const when = fullDateTime(entry.at);
   const where = [deviceSummary(entry.device) ?? 'Unknown device', entry.ip ? `IP ${entry.ip}` : null].filter(Boolean).join(' · ');
   // Phones' browsers name the phone as the model, and the app names the device.
   const onComputer = entry.device?.model === WEB_BROWSER_MODEL;
+  const file = entry.kind === 'file';
+  const what = file ? entry.filename : entry.conversationTitle;
+  const kind = downloadKind(entry);
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${entry.conversationTitle}, downloaded by ${entry.user.displayName} on ${when}`}
+      accessibilityLabel={`${PURPOSE_LABEL[entry.purpose]}: ${what}, ${kind.toLowerCase()}, by ${entry.user.displayName} on ${when}`}
       accessibilityHint="Shows everything recorded about this download"
       onPress={() => router.push({ pathname: '/admin/exports/[exportId]', params: { exportId: entry.id } })}
       style={({ pressed }) => [styles.row, { backgroundColor: theme.surface, borderColor: theme.border, opacity: pressed ? 0.85 : 1 }]}>
@@ -37,8 +43,15 @@ export function DownloadRow({ entry }: { entry: ExportEntry }) {
         <Ionicons name="chevron-forward" size={18} color={theme.textSecondary} />
       </View>
       <Text numberOfLines={2} style={[styles.title, { color: theme.text }]}>
-        {entry.conversationTitle}
+        {what}
       </Text>
+      <View style={styles.tags}>
+        <Chip label={PURPOSE_LABEL[entry.purpose]} tone={PURPOSE_TONE[entry.purpose]} />
+        <Text numberOfLines={1} style={[styles.meta, styles.flex, { color: theme.textSecondary }]}>
+          {`${kind} · ${entry.mimeType}`}
+        </Text>
+      </View>
+      {file ? <Fact icon="chatbubble-outline" text={`In “${entry.conversationTitle}”`} /> : null}
       <Fact icon="time-outline" text={when} />
       <Fact icon={onComputer ? 'desktop-outline' : 'phone-portrait-outline'} text={where} />
     </Pressable>
@@ -61,6 +74,7 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   name: { fontSize: 15, fontWeight: '700' },
   title: { fontSize: 15, lineHeight: 21, fontWeight: '500' },
+  tags: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   meta: { fontSize: 13, lineHeight: 18 },
   fact: { flexDirection: 'row', gap: Spacing.sm },
   factIcon: { marginTop: 1 },

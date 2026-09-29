@@ -105,6 +105,7 @@ function totalsLine(totals: WeeklyTotals): string[] {
   return [
     count(totals.activeUsers, 'active person', 'active people'),
     count(totals.messages, 'message'),
+    count(totals.uploads, 'upload'),
     count(totals.changesConfirmed, 'change'),
     count(totals.exports, 'download'),
   ];

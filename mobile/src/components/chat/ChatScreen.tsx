@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { ChatMessage } from '@shared/api';
 import { MaxContentWidth, useTheme } from '@/constants/theme';
 import { answerTo } from '@/lib/answer';
+import { attachedFilesText, useAttachments } from '@/lib/attachments';
 import type { FinishedReply } from '@/lib/chat-session';
 import { useChatSessions, useChatState } from '@/lib/chat-sessions';
 import { MAX_MESSAGE_LENGTH } from '@/lib/chat-stream';
@@ -20,6 +21,7 @@ import { useVoiceInput } from '@/lib/voice';
 import { AssistantResponse } from './AssistantResponse';
 import { ChatHeader } from './ChatHeader';
 import { Composer } from './Composer';
+import { Disclaimer } from './Disclaimer';
 import { HistoryError, HistorySkeleton } from './HistoryState';
 import { MessageList } from './MessageList';
 import { ShareNotice } from './ShareNotice';
@@ -43,21 +45,31 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
   const reading = useReading();
   const sharing = useShareConversation();
   const [draft, setDraft] = useState('');
+  const attachments = useAttachments();
 
   const busy = state.running !== null;
   const ready = state.history.status === 'ready';
   // Nothing can be answered while the reply it belongs to is still out of date here.
   const pending = ready && !state.settling ? pendingConfirmation(state.messages) : null;
 
-  /** Sends what the person typed or said. A plain yes or no answers the waiting confirmation instead. */
+  /**
+   * Sends what the person typed or said, with the files they attached. A plain yes or no, without files, answers the
+   * waiting confirmation instead.
+   */
   function submit(text: string, spoken: boolean): boolean {
-    const request = text.trim();
-    if (!request || request.length > MAX_MESSAGE_LENGTH || busy || !ready) return false;
+    const { files } = attachments;
+    // The server needs words with every message, so files sent on their own get some.
+    const request = text.trim() || attachedFilesText(files.length);
+    if (!request || request.length > MAX_MESSAGE_LENGTH || busy || !ready || !attachments.ready) return false;
     stopSpeaking();
     tapFeedback();
-    const answer = pending ? answerTo(request) : null;
-    if (pending && answer) session.decide(pending.id, answer, spoken);
-    else session.send(request, spoken);
+    const answer = pending && files.length === 0 ? answerTo(request) : null;
+    if (pending && answer) {
+      session.decide(pending.id, answer, spoken);
+    } else {
+      session.send(request, spoken, files);
+      attachments.clear();
+    }
     return true;
   }
 
@@ -107,7 +119,7 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
   const deciding = state.running?.kind === 'decision' ? state.running : null;
 
   function renderMessage(message: ChatMessage): ReactElement {
-    if (message.role === 'user') return <UserBubble text={message.text} />;
+    if (message.role === 'user') return <UserBubble text={message.text} attachments={message.attachments} />;
     const retryable = !busy && message === lastReply && message.status === 'error';
     return (
       <AssistantResponse
@@ -170,7 +182,9 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
             disabled={!ready}
             voice={voice}
             sendsVoice={settings.autoSendVoice}
+            attachments={attachments}
           />
+          <Disclaimer />
           <ShareNotice state={sharing.state} onDismiss={sharing.reset} />
         </View>
       </KeyboardAvoidingView>

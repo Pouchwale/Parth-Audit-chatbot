@@ -8,7 +8,7 @@ import { UserBubble } from './UserBubble';
 export function UnsentRequest({ request, error, onResend }: { request: ChatRequest; error: string; onResend(): void }) {
   return (
     <View style={styles.unsent}>
-      {request.kind === 'message' ? <UserBubble text={request.text} faded /> : null}
+      {request.kind === 'message' ? <UserBubble text={request.text} attachments={request.attachments} faded /> : null}
       <InlineError message={error} onRetry={onResend} />
     </View>
   );

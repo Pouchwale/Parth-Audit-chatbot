@@ -1,9 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Radius, Spacing, useColorSchemeSetting, useTheme } from '@/constants/theme';
+import type { Attachments } from '@/lib/attachments';
 import { MAX_MESSAGE_LENGTH } from '@/lib/chat-stream';
 import type { VoiceInput } from '@/lib/voice';
+import { AttachMenu, type Anchor } from './AttachMenu';
+import { AttachmentChips } from './AttachmentChips';
 import { ComposerButton } from './ComposerButton';
 import { RecordingBar } from './RecordingBar';
 
@@ -15,8 +18,9 @@ const MAX_INPUT_HEIGHT = 6 * LINE_HEIGHT + 2 * INPUT_PADDING;
 const IME_KEY_CODE = 229;
 
 /**
- * The message box: grows to six lines, then scrolls. On the right, Send when there is text, the microphone
- * when there isn't, and Stop while a reply is being written. Recording replaces the box with its own bar.
+ * The message box: grows to six lines, then scrolls. On the left, the button that attaches photos and files, which
+ * show above the text as they upload. On the right, the microphone when there is no text, Send when there is
+ * something to send, and Stop while a reply is being written. Recording replaces the box with its own bar.
  */
 export function Composer({
   value,
@@ -28,6 +32,7 @@ export function Composer({
   disabled,
   voice,
   sendsVoice,
+  attachments,
 }: {
   value: string;
   onChangeText(text: string): void;
@@ -42,12 +47,23 @@ export function Composer({
   voice: VoiceInput;
   /** A finished recording is sent straight away rather than put in the box. */
   sendsVoice: boolean;
+  attachments: Attachments;
 }) {
   const theme = useTheme();
   const scheme = useColorSchemeSetting();
   const [focused, setFocused] = useState(false);
   const [webHeight, setWebHeight] = useState(MIN_INPUT_HEIGHT);
+  const [menu, setMenu] = useState<{ open: boolean; anchor: Anchor | null }>({ open: false, anchor: null });
+  const attachButton = useRef<View>(null);
+  const hasText = value.trim().length > 0;
   const tooLong = value.trim().length > MAX_MESSAGE_LENGTH;
+  const hasFiles = attachments.items.length > 0;
+
+  function openMenu() {
+    // Phones show the menu as a sheet; browsers show it beside the button, so it is measured first.
+    if (Platform.OS !== 'web') return setMenu({ open: true, anchor: null });
+    attachButton.current?.measureInWindow((x, y) => setMenu({ open: true, anchor: { x, y } }));
+  }
 
   function renderContent() {
     if (voice.phase === 'recording') {
@@ -71,6 +87,9 @@ export function Composer({
     }
     return (
       <>
+        <View ref={attachButton} collapsable={false}>
+          <ComposerButton icon="add" label="Add attachment" onPress={openMenu} disabled={disabled} />
+        </View>
         <TextInput
           value={value}
           onChangeText={onChangeText}
@@ -103,16 +122,27 @@ export function Composer({
         />
         {busy ? (
           <ComposerButton icon="stop" label={stopping ? 'Stopping the reply' : 'Stop the reply'} onPress={onStop} primary busy={stopping} />
-        ) : value.trim() ? (
-          <ComposerButton icon="arrow-up" label="Send message" onPress={onSend} primary disabled={disabled || tooLong} />
         ) : (
-          <ComposerButton
-            icon="mic"
-            label="Record a voice message"
-            onPress={voice.start}
-            busy={voice.phase === 'starting'}
-            disabled={disabled}
-          />
+          <>
+            {hasText ? null : (
+              <ComposerButton
+                icon="mic"
+                label="Record a voice message"
+                onPress={voice.start}
+                busy={voice.phase === 'starting'}
+                disabled={disabled}
+              />
+            )}
+            {hasText || hasFiles ? (
+              <ComposerButton
+                icon="arrow-up"
+                label={attachments.ready ? 'Send message' : 'Send message, once the files have uploaded'}
+                onPress={onSend}
+                primary
+                disabled={disabled || tooLong || !attachments.ready}
+              />
+            ) : null}
+          </>
         )}
       </>
     );
@@ -120,24 +150,40 @@ export function Composer({
 
   return (
     <View style={styles.container}>
-      {voice.problem ? (
-        <View style={[styles.problem, { backgroundColor: theme.warningSoft }]} accessibilityLiveRegion="polite">
-          <Text style={[styles.problemText, { color: theme.warning }]}>{voice.problem}</Text>
-          <Pressable accessibilityRole="button" accessibilityLabel="Dismiss" onPress={voice.dismissProblem} hitSlop={8}>
-            <Ionicons name="close" size={18} color={theme.warning} />
-          </Pressable>
-        </View>
-      ) : null}
-      {tooLong ? (
-        <View style={[styles.problem, { backgroundColor: theme.warningSoft }]} accessibilityLiveRegion="polite">
-          <Text style={[styles.problemText, { color: theme.warning }]}>
-            {`Messages can be up to ${MAX_MESSAGE_LENGTH.toLocaleString()} characters. Shorten this one to send it.`}
-          </Text>
-        </View>
-      ) : null}
+      {voice.problem ? <Problem text={voice.problem} onDismiss={voice.dismissProblem} /> : null}
+      {attachments.notice ? <Problem text={attachments.notice} onDismiss={attachments.dismissNotice} /> : null}
+      {tooLong ? <Problem text={`Messages can be up to ${MAX_MESSAGE_LENGTH.toLocaleString()} characters. Shorten this one to send it.`} /> : null}
       <View style={[styles.box, { backgroundColor: theme.surface, borderColor: focused ? theme.textSecondary : theme.border }]}>
-        {renderContent()}
+        {hasFiles ? <AttachmentChips items={attachments.items} onRemove={attachments.remove} onRetry={attachments.retry} /> : null}
+        {attachments.reading ? (
+          <View style={styles.reading} accessibilityLiveRegion="polite">
+            <ActivityIndicator size="small" color={theme.textSecondary} />
+            <Text style={[styles.readingText, { color: theme.textSecondary }]}>Reading the folder…</Text>
+          </View>
+        ) : null}
+        <View style={styles.row}>{renderContent()}</View>
       </View>
+      <AttachMenu
+        visible={menu.open}
+        anchor={menu.anchor}
+        onPick={attachments.pick}
+        onClose={() => setMenu((current) => ({ ...current, open: false }))}
+      />
+    </View>
+  );
+}
+
+/** Something about the message to put right, above the box. */
+function Problem({ text, onDismiss }: { text: string; onDismiss?: () => void }) {
+  const theme = useTheme();
+  return (
+    <View style={[styles.problem, { backgroundColor: theme.warningSoft }]} accessibilityLiveRegion="polite">
+      <Text style={[styles.problemText, { color: theme.warning }]}>{text}</Text>
+      {onDismiss ? (
+        <Pressable accessibilityRole="button" accessibilityLabel="Dismiss" onPress={onDismiss} hitSlop={8}>
+          <Ionicons name="close" size={18} color={theme.warning} />
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -145,16 +191,12 @@ export function Composer({
 const styles = StyleSheet.create({
   container: { paddingHorizontal: Spacing.md, paddingTop: Spacing.xs, paddingBottom: Spacing.sm, gap: Spacing.sm },
   box: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: Spacing.xs,
-    minHeight: MIN_INPUT_HEIGHT + 2 * Spacing.sm,
     borderRadius: Radius.lg + 6,
     borderWidth: 1,
-    paddingLeft: Spacing.lg,
-    paddingRight: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
     paddingVertical: Spacing.sm,
   },
+  row: { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.xs, minHeight: MIN_INPUT_HEIGHT },
   input: {
     flex: 1,
     minHeight: MIN_INPUT_HEIGHT,
@@ -168,8 +210,10 @@ const styles = StyleSheet.create({
     outlineStyle: 'solid',
     outlineWidth: 0,
   },
-  transcribing: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, height: MIN_INPUT_HEIGHT },
+  transcribing: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, height: MIN_INPUT_HEIGHT, paddingLeft: Spacing.sm },
   transcribingText: { fontSize: 16 },
+  reading: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingHorizontal: Spacing.sm, paddingBottom: Spacing.sm },
+  readingText: { fontSize: 14 },
   problem: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, borderRadius: Radius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm },
   problemText: { flex: 1, fontSize: 14, lineHeight: 20 },
 });

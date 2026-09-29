@@ -1,4 +1,4 @@
-import type { ActionStatus, ConversationSummary, ExportDevice, Role } from '@shared/api';
+import type { ActionStatus, ConversationSummary, ExportDevice, ExportEntry, FilePurpose, Role } from '@shared/api';
 
 export const ROLE_LABEL: Record<Role, string> = {
   user: 'Member',
@@ -61,6 +61,19 @@ export function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const [size, unit] = bytes < 1024 * 1024 ? [bytes / 1024, 'KB'] : [bytes / (1024 * 1024), 'MB'];
   return `${size < 10 ? size.toFixed(1) : Math.round(size)} ${unit}`;
+}
+
+/** What the person did with a file that left the server. */
+export const PURPOSE_LABEL: Record<FilePurpose, string> = {
+  open: 'Opened',
+  download: 'Downloaded',
+  share: 'Shared',
+};
+
+/** What a download was: a conversation, or a file and the system it came from, e.g. "File from DCRS". */
+export function downloadKind(entry: Pick<ExportEntry, 'kind' | 'source'>): string {
+  if (entry.kind === 'conversation') return 'Conversation';
+  return entry.source ? `File from ${entry.source}` : 'File';
 }
 
 /** The operating system and its version, e.g. "Android 15". */

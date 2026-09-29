@@ -40,6 +40,7 @@ export function PersonWeekCard({ summary, timeZone, onPress }: { summary: Weekly
       <View style={styles.facts}>
         <Fact label="Messages" value={summary.messages.toLocaleString()} />
         <Fact label="Lookups" value={summary.lookups.toLocaleString()} />
+        <Fact label="Uploads" value={summary.uploads.toLocaleString()} />
         <Fact label="Devices" value={summary.devices.toLocaleString()} />
         <Fact label="Downloads" value={downloads} />
         <Fact label="Sign-ins" value={summary.signIns.toLocaleString()} />
@@ -47,21 +48,29 @@ export function PersonWeekCard({ summary, timeZone, onPress }: { summary: Weekly
       </View>
       <Fact label="Changes" value={changes} />
 
-      {summary.exportedConversations.length > 0 ? (
-        <View style={styles.titles}>
-          <Text style={[styles.label, { color: theme.textSecondary }]}>Downloaded conversations</Text>
-          {summary.exportedConversations.map((title, index) => (
-            <Text key={index} numberOfLines={2} style={[styles.value, { color: theme.text }]}>
-              • {title}
-            </Text>
-          ))}
-        </View>
-      ) : null}
+      <Names label="Downloaded conversations" names={summary.exportedConversations} />
+      <Names label="Files opened, downloaded or shared" names={summary.downloadedFiles} />
 
       <Text style={[styles.meta, { color: theme.textSecondary }]}>
         {lastActiveAt ? `Last active ${fullDateTimeIn(lastActiveAt, timeZone) ?? fullDateTime(lastActiveAt)}` : 'Sent no messages this week'}
       </Text>
     </Pressable>
+  );
+}
+
+/** A list of titles or file names, when there are any. */
+function Names({ label, names }: { label: string; names: readonly string[] }) {
+  const theme = useTheme();
+  if (names.length === 0) return null;
+  return (
+    <View style={styles.titles}>
+      <Text style={[styles.label, { color: theme.textSecondary }]}>{label}</Text>
+      {names.map((name, index) => (
+        <Text key={index} numberOfLines={2} style={[styles.value, { color: theme.text }]}>
+          • {name}
+        </Text>
+      ))}
+    </View>
   );
 }
 

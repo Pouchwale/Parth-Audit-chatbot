@@ -17,7 +17,7 @@ const TABS: readonly { value: Tab; label: string }[] = [
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * Who downloaded which conversation and when, and weekly reports of what everyone did. Opened with `userId`, `from`
+ * Who downloaded which conversation or file and when, and weekly reports of what everyone did. Opened with `userId`, `from`
  * and `to` (a report's week) and `timeZone` (the report's), it starts on that person's downloads that week.
  */
 export default function SecurityScreen() {

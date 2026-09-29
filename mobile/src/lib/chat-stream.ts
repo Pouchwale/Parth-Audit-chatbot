@@ -1,14 +1,14 @@
 // On iOS and Android this is Expo's fetch, which streams response bodies; on web it is the browser's own.
 import { fetch } from 'expo/fetch';
 import { Platform } from 'react-native';
-import type { AssistantReply, DecisionRequest, MessageRequest, RetryRequest, StreamEvent } from '@shared/api';
+import type { AssistantReply, DecisionRequest, FileInfo, MessageRequest, RetryRequest, StreamEvent } from '@shared/api';
 import { ApiError, conversationPath, requestFailed, SERVER_URL, unreachable } from './api';
 import { timeZone } from './device';
 import { readSse } from './sse';
 
 /** Something the person asked for: a new message, an answer to a confirmation, or another try at a failed reply. */
 export type ChatRequest =
-  | { kind: 'message'; conversationId?: string; text: string }
+  | { kind: 'message'; conversationId?: string; text: string; attachments: FileInfo[] }
   | { kind: 'decision'; conversationId: string; confirmationId: string; decision: 'confirm' | 'cancel' }
   | { kind: 'retry'; conversationId: string };
 
@@ -94,7 +94,13 @@ function endpoint(request: ChatRequest): { path: string; body: MessageRequest | 
     case 'message':
       return {
         path: '/assistant/messages',
-        body: { conversationId: request.conversationId, text: request.text, timeZone: zone, stream: true },
+        body: {
+          conversationId: request.conversationId,
+          text: request.text,
+          timeZone: zone,
+          stream: true,
+          attachments: request.attachments.length > 0 ? request.attachments.map((file) => file.id) : undefined,
+        },
       };
     case 'decision':
       return {

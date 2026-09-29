@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
-import { AccessibilityInfo, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import type { ConversationExport } from '@shared/api';
+import { announce } from './announce';
 import { api, ApiError } from './api';
 import { useAuth } from './auth';
 import { timeZone } from './device';
@@ -59,7 +60,9 @@ export function useShareConversation(): ShareConversation {
       try {
         // Checked first: a file this device can't take must not be recorded as handed out.
         if (!(await canSaveExports())) return report({ status: 'failed', error: CANT_SHARE, retryable: false });
-        file = await call((token) => api.exportConversation(token, conversationId, { timeZone: timeZone() }));
+        // Browsers download the file; phones hand it to the share sheet.
+        const purpose = Platform.OS === 'web' ? 'download' : 'share';
+        file = await call((token) => api.exportConversation(token, conversationId, { timeZone: timeZone(), purpose }));
       } finally {
         preparing = false;
       }
@@ -84,12 +87,4 @@ export function useShareConversation(): ShareConversation {
   }
 
   return { state, share: (conversationId) => void share(conversationId), reset };
-}
-
-/**
- * Reads how a share went out loud on phones, where screen readers don't announce a notice appearing. Queued, so that
- * it follows what they say as the share sheet closes. Browsers announce the notice itself, by its alert role.
- */
-function announce(message: string) {
-  if (Platform.OS !== 'web') AccessibilityInfo.announceForAccessibilityWithOptions(message, { queue: true });
 }

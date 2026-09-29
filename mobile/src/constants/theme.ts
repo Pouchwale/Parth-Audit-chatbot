@@ -22,6 +22,8 @@ export const Colors = {
     successSoft: '#E3F1E7',
     warning: '#8A5A00',
     warningSoft: '#FAEFD6',
+    info: '#2F6DB5',
+    infoSoft: '#E3ECF7',
   },
   dark: {
     text: '#F4F3EE',
@@ -41,6 +43,8 @@ export const Colors = {
     successSoft: '#1F3527',
     warning: '#F0BF5E',
     warningSoft: '#3E3219',
+    info: '#8AB4F0',
+    infoSoft: '#22324A',
   },
 } as const;
 

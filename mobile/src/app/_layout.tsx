@@ -58,6 +58,7 @@ function Screens() {
       <Stack.Protected guard={status === 'signedIn'}>
         <Stack.Screen name="(app)" options={{ headerShown: false, title: 'Assistant' }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+        <Stack.Screen name="viewer" options={{ title: 'File' }} />
         <Stack.Protected guard={user?.role === 'super_admin'}>
           <Stack.Screen name="admin/index" options={{ title: 'Accounts' }} />
           <Stack.Screen name="admin/[userId]" options={{ title: 'Account' }} />
