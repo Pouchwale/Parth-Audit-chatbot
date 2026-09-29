@@ -5,6 +5,7 @@ import { buildApp } from './app.ts';
 import type { Config } from './config.ts';
 import type { Registry } from './connectors/registry.ts';
 import { openDatabase } from './db/index.ts';
+import { groqImageReader } from './files/vision.ts';
 import { startMaintenance } from './maintenance.ts';
 import { groqTranscriber } from './voice/transcriber.ts';
 
@@ -21,6 +22,7 @@ export async function startServer(config: Config, registry: Registry, options: {
       model: groqModel(config, groq),
       titler: groqTitler(config, groq),
       transcriber: groqTranscriber(config, groq, registry.connectors),
+      imageReader: groqImageReader(config, groq),
     },
     { logger: { level: options.logLevel ?? 'info' } },
   );

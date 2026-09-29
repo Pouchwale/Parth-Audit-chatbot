@@ -1,5 +1,6 @@
-import type { ActionStatus, ActivityPart, AssistantMessage, ChatMessage, ConfirmationPart, MessagePart } from '@shared/api.ts';
+import type { ActionStatus, ActivityPart, AssistantMessage, ChatMessage, ConfirmationPart, FileInfo, MessagePart } from '@shared/api.ts';
 import { NOT_CONFIRMED_IN_TIME } from '../agent/transcript.ts';
+import { sizeLabel } from '../files/formats.ts';
 import { localDate } from '../time.ts';
 
 export const EXPORT_MIME_TYPE = 'text/markdown; charset=utf-8';
@@ -55,7 +56,7 @@ export function exportFile(input: ExportInput): ExportFile {
   ].join('\n');
   const messages = input.messages.flatMap((message) =>
     message.role === 'user'
-      ? [`## ${displayName} · ${when(message.createdAt)}`, quote(message.text)]
+      ? [`## ${displayName} · ${when(message.createdAt)}`, quote(message.text), ...attachmentBlocks(message.attachments ?? [])]
       : [`## ${APP_NAME} · ${when(message.createdAt)}`, ...assistantBlocks(message, input.at)],
   );
   const footer = `This file was exported from ${APP_NAME} by ${username} on ${exportedOn}. Export ID ${input.id}. Every export is recorded.`;
@@ -72,9 +73,14 @@ function assistantBlocks(message: AssistantMessage, at: Date): string[] {
   return blocks;
 }
 
+function attachmentBlocks(files: FileInfo[]): string[] {
+  return files.length > 0 ? [['Attached:', ...files.map((file) => `- ${fileLine(file)}`)].join('\n')] : [];
+}
+
 function partBlock(part: MessagePart, at: Date): string {
   if (part.type === 'text') return part.text.trim();
   if (part.type === 'activity') return `${part.kind === 'read' ? 'Lookup' : 'Change'}: ${outcome(part)}`;
+  if (part.type === 'file') return `File from ${part.file.system ?? 'a connected system'}: ${fileLine(part.file)}`;
   const shown = part.status === 'pending' && Date.parse(part.expiresAt) <= at.getTime() ? expired(part) : part;
   const changes = shown.changes.map((change) => `- ${outcome(change)}`);
   return [`Changes proposed for confirmation — ${DECISION[shown.status]}`, ...changes].join('\n');
@@ -92,6 +98,11 @@ function expired(part: ConfirmationPart): ConfirmationPart {
       change.status === 'awaiting_confirmation' ? { ...change, status: 'cancelled', error: NOT_CONFIRMED_IN_TIME } : change,
     ),
   };
+}
+
+/** "site-a/photo-1.jpg (image/jpeg, 245 KB)" */
+function fileLine(file: FileInfo): string {
+  return `${file.relativePath ?? file.filename} (${file.mimeType}, ${sizeLabel(file.sizeBytes)})`;
 }
 
 function outcome(action: Pick<ActivityPart, 'summary' | 'system' | 'status' | 'error'>): string {

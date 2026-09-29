@@ -10,18 +10,23 @@ import type {
   AssistantReply,
   Confirmation,
   ConfirmationPart,
+  FileInfo,
   StreamEvent,
   UserMessage,
 } from '@shared/api.ts';
 import type { AppDeps } from '../app.ts';
 import { loadCredentials } from '../auth/sessions.ts';
 import type { Registry, ToolBinding } from '../connectors/registry.ts';
-import { ConnectorError } from '../connectors/types.ts';
+import { ConnectorError, splitResult, type ActionFile, type DescribeContext } from '../connectors/types.ts';
 import { one, type Db } from '../db/index.ts';
 import { actions, conversations, messageEvents, type PendingCall, type PendingConfirmation } from '../db/schema.ts';
+import { attachedFiles, attachFiles, historyMessage, modelMessages } from '../files/attachments.ts';
+import { baseType } from '../files/formats.ts';
+import { baseName } from '../files/names.ts';
+import { conversationFiles, fileInfo, storeFile } from '../files/store.ts';
 import { errorResponse, HttpError } from '../http.ts';
 import { openConversation, openInterrupted, type WorkingConversation } from './conversation.ts';
-import { explainGroqError, type ModelRequest, type Tool, type ToolMessage } from './model.ts';
+import { explainGroqError, isRequestTooLarge, type ModelRequest, type Tool, type ToolMessage } from './model.ts';
 import { systemPrompt } from './prompt.ts';
 import { titleFor } from './titles.ts';
 import {
@@ -78,23 +83,34 @@ interface Plan {
   work(reply: MessageWriter): Promise<Outcome>;
 }
 
-/** Handles something the person said or typed. */
-export async function sendMessage(turn: Turn, conversationId: string | undefined, text: string): Promise<TurnResult> {
+/** Handles something the person said or typed, with the ids of the files they attached to it. */
+export async function sendMessage(
+  turn: Turn,
+  conversationId: string | undefined,
+  text: string,
+  attachmentIds: readonly string[] = [],
+): Promise<TurnResult> {
   return withConversation(turn, conversationId, async (conv) => {
+    // First: it can turn the message down, and changes nothing unless it succeeds.
+    const attached = await attachFiles(turn.deps, turn.log, turn.userId, conv.id, attachmentIds);
     await recoverInterrupted(turn.deps.db, conv);
     // The person moved on without answering, so the waiting changes are dropped.
     if (conv.pending) await dropPending(turn, conv, conv.pending, 'superseded');
-    const userMessage = newUserMessage(text);
+    const userMessage = newUserMessage(text, attached.map((file) => fileInfo(file, turn.deps.registry)));
     const message = newAssistantMessage();
     conv.transcript.push(userMessage, message);
-    conv.messages.push({ role: 'user', content: text });
+    conv.messages.push(historyMessage(text, attached));
     return {
       message,
       userMessage,
       work: async (reply) => {
-        await turn.deps.db
-          .insert(messageEvents)
-          .values({ userId: turn.userId, sessionId: turn.sessionId, conversationId: conv.id, chars: text.length });
+        await turn.deps.db.insert(messageEvents).values({
+          userId: turn.userId,
+          sessionId: turn.sessionId,
+          conversationId: conv.id,
+          chars: text.length,
+          attachments: attached.length,
+        });
         const naming = conversationId ? undefined : nameConversation(turn, conv, text);
         try {
           return await runModel(turn, conv, reply, text);
@@ -210,8 +226,9 @@ async function confirm(
       continue;
     }
     show(call, 'running', null);
-    const run = await execute(turn, call.toolName, call.input, call.toolCallId, call.actionId);
+    const run = await execute(turn, conv.id, call.toolName, call.input, call.toolCallId, call.actionId);
     show(call, run.ok ? 'succeeded' : 'failed', run.error ?? null);
+    for (const file of run.files) reply.put({ type: 'file', file });
     results.push(run.result);
     outcomes.push(run.ok ? `Done: ${call.summary}.` : `Couldn't ${lowerFirst(call.summary)}: ${run.error}`);
     if (!run.ok) stop = run.signedOut ? 'signed_out' : 'failed';
@@ -242,10 +259,13 @@ async function runModel(turn: Turn, conv: WorkingConversation, reply: MessageWri
     timeZone: turn.timeZone,
   });
   const tools = toolDefinitions(deps.registry);
+  const context: DescribeContext = { files: conversationFiles(deps, turn.userId, conv.id) };
+  const attached = await attachedFiles(deps.db, turn.userId, conv.id, conv.messages);
 
   for (let calls = 0; calls < MAX_MODEL_CALLS; calls++) {
     reply.beginResponse();
-    const completion = await callModel(turn, { system, tools, messages: conv.messages }, reply);
+    const messages = modelMessages(conv.messages, attached, deps.config.fileTextChars);
+    const completion = await callModel(turn, { system, tools, messages }, reply);
     if (!completion) return stopped(conv, reply);
     const choice = completion.choices[0];
     if (!choice || choice.finish_reason === 'length') {
@@ -291,7 +311,11 @@ async function runModel(turn: Turn, conv: WorkingConversation, reply: MessageWri
         results.push(toolError(call.id, SIGNED_OUT));
         continue;
       }
-      const summary = describe(binding, parsed.data);
+      const summary = await describe(binding, parsed.data, context);
+      if (summary instanceof ConnectorError) {
+        results.push(toolError(call.id, summary.message));
+        continue;
+      }
       if (binding.action.kind === 'write') {
         const actionId = await logAction(turn, conv.id, binding, parsed.data, summary, 'awaiting_confirmation', request);
         proposed.push({ toolCallId: call.id, toolName: binding.toolName, input: parsed.data, actionId, system: binding.connector.name, summary });
@@ -308,8 +332,9 @@ async function runModel(turn: Turn, conv: WorkingConversation, reply: MessageWri
         error: null,
       };
       reply.put(activity);
-      const run = await execute(turn, binding.toolName, parsed.data, call.id, actionId);
+      const run = await execute(turn, conv.id, binding.toolName, parsed.data, call.id, actionId);
       reply.put({ ...activity, status: run.ok ? 'succeeded' : 'failed', error: run.error ?? null });
+      for (const file of run.files) reply.put({ type: 'file', file });
       results.push(run.result);
       signedOut ||= run.signedOut;
     }
@@ -346,6 +371,11 @@ async function callModel(turn: Turn, request: ModelRequest, reply: MessageWriter
     if (signal?.aborted) return undefined;
     // The unfinished response never reaches the history, so its text goes too: a retry writes it again.
     reply.discardResponse();
+    if (isRequestTooLarge(error)) {
+      // The history, with the files' text in it, is more than the model's tier takes in one request. Trying again can't help.
+      turn.log.warn({ err: error }, 'the conversation is too long for the model');
+      throw new HttpError(413, 'conversation_too_long', 'This conversation, with its files, has grown too long for the assistant. Start a new one, or send less at a time.');
+    }
     throw explainGroqError(error, turn.log);
   }
 }
@@ -371,32 +401,36 @@ interface RunResult {
   ok: boolean;
   signedOut: boolean;
   error?: string;
+  /** Files the action handed the person. */
+  files: FileInfo[];
 }
 
-async function execute(turn: Turn, toolName: string, input: unknown, toolCallId: string, actionId: string): Promise<RunResult> {
+const FILES_NOTE =
+  "The person sees each file as a card with Open, Download and Share buttons. Say briefly that it is ready and what it is; don't repeat its contents or give links.";
+
+async function execute(
+  turn: Turn,
+  conversationId: string,
+  toolName: string,
+  input: unknown,
+  toolCallId: string,
+  actionId: string,
+): Promise<RunResult> {
   const { deps } = turn;
   const binding = deps.registry.find(toolName);
   const parsed = binding?.action.input.safeParse(input);
   if (!binding || !parsed?.success) {
     const message = 'This action is no longer available.';
     await finish(deps.db, actionId, 'failed', message);
-    return { ok: false, signedOut: false, error: message, result: toolError(toolCallId, message) };
+    return { ok: false, signedOut: false, error: message, result: toolError(toolCallId, message), files: [] };
   }
 
   await deps.db.update(actions).set({ status: 'running' }).where(eq(actions.id, actionId));
+  let output: unknown;
   try {
     const credentials = await loadCredentials(deps, turn.sessionId, binding.connector.id);
     if (credentials === undefined) throw new ConnectorError('unauthorized', `You aren't signed in to ${binding.connector.name}.`);
-    const output = await binding.action.run({ credentials }, parsed.data);
-    await finish(deps.db, actionId, 'succeeded', null);
-
-    const json = JSON.stringify(output ?? null);
-    if (json.length <= MAX_RESULT_CHARS) return { ok: true, signedOut: false, result: toolResult(toolCallId, json) };
-    const tooLarge =
-      binding.action.kind === 'write'
-        ? 'The change was made, but the response was too large to include.'
-        : `The result was too large to read (${json.length} characters). Ask for fewer records or narrow the search.`;
-    return { ok: true, signedOut: false, result: toolError(toolCallId, tooLarge) };
+    output = await binding.action.run({ credentials, files: conversationFiles(deps, turn.userId, conversationId) }, parsed.data);
   } catch (error) {
     const known = error instanceof ConnectorError ? error : undefined;
     if (!known) turn.log.error({ err: error, tool: toolName }, 'connector action failed unexpectedly');
@@ -404,8 +438,45 @@ async function execute(turn: Turn, toolName: string, input: unknown, toolCallId:
     await finish(deps.db, actionId, 'failed', message);
     // Losing the sign-in connector's session means the person has to sign in again.
     const signedOut = known?.kind === 'unauthorized' && binding.connector.id === deps.registry.signIn.id;
-    return { ok: false, signedOut, error: message, result: toolError(toolCallId, message) };
+    return { ok: false, signedOut, error: message, result: toolError(toolCallId, message), files: [] };
   }
+  // The system did what was asked, so a failure from here on is the server's own, never the action's.
+  await finish(deps.db, actionId, 'succeeded', null);
+
+  const { result, files } = splitResult(output);
+  const delivered: FileInfo[] = [];
+  const handedOver: { id: string; filename: string; mimeType: string; sizeBytes: number; description?: string | undefined }[] = [];
+  for (const file of files) {
+    const info = await deliver(turn, conversationId, binding, actionId, file);
+    delivered.push(info);
+    handedOver.push({ id: info.id, filename: info.filename, mimeType: info.mimeType, sizeBytes: info.sizeBytes, description: file.description });
+  }
+  const json = JSON.stringify(handedOver.length > 0 ? { result: result ?? null, files: handedOver, note: FILES_NOTE } : (result ?? null));
+  if (json.length <= MAX_RESULT_CHARS) return { ok: true, signedOut: false, result: toolResult(toolCallId, json), files: delivered };
+  const tooLarge =
+    binding.action.kind === 'write'
+      ? 'The change was made, but the response was too large to include.'
+      : `The result was too large to read (${json.length} characters). Ask for fewer records or narrow the search.`;
+  return { ok: true, signedOut: false, result: toolError(toolCallId, tooLarge), files: delivered };
+}
+
+/** Keeps a file an action handed over in the person's conversation, for them to open, download or share. */
+async function deliver(turn: Turn, conversationId: string, binding: ToolBinding, actionId: string, file: ActionFile): Promise<FileInfo> {
+  const row = await storeFile(
+    turn.deps,
+    {
+      userId: turn.userId,
+      conversationId,
+      origin: 'system',
+      connectorId: binding.connector.id,
+      actionId,
+      filename: baseName(file.filename) || 'file',
+      mimeType: baseType(file.mimeType) || 'application/octet-stream',
+      data: file.data,
+    },
+    turn.log,
+  );
+  return fileInfo(row, turn.deps.registry);
 }
 
 async function logAction(
@@ -532,8 +603,8 @@ async function withConversation(
   try {
     prepared = await plan(conv);
   } catch (error) {
-    // Nothing has started yet, so the conversation stays as it was.
-    await conv.release();
+    // Nothing has started yet, so the conversation stays as it was: an existing one is let go, a new one removed.
+    await (conversationId ? conv.release() : conv.discard());
     throw error;
   }
   const { message, userMessage, work } = prepared;
@@ -590,11 +661,12 @@ export function toolDefinitions(registry: Registry): Tool[] {
   return tools;
 }
 
-function describe(binding: ToolBinding, input: unknown): string {
+/** The sentence shown for a call, or the ConnectorError the action turned the call down with. */
+async function describe(binding: ToolBinding, input: unknown, context: DescribeContext): Promise<string | ConnectorError> {
   try {
-    return binding.action.describe(input).trim() || binding.action.name;
-  } catch {
-    return `${binding.connector.name}: ${binding.action.name}`;
+    return (await binding.action.describe(input, context)).trim() || binding.action.name;
+  } catch (error) {
+    return error instanceof ConnectorError ? error : `${binding.connector.name}: ${binding.action.name}`;
   }
 }
 

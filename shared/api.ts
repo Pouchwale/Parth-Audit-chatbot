@@ -47,7 +47,34 @@ export interface MessageRequest {
   timeZone?: string;
   /** Answer with Server-Sent Events (see StreamEvent) instead of one JSON AssistantReply. */
   stream?: boolean;
+  /** Ids of files uploaded with POST /assistant/files for this message (at most 20). */
+  attachments?: string[];
 }
+
+// ── Files ────────────────────────────────────────────────────────────────────────────────────────
+// Upload: POST /assistant/files with the raw bytes as the body, the file's type as Content-Type, and query
+// parameters `name` (the file name) and optionally `path` (its path inside a picked folder). Answers FileInfo.
+// Download: GET /assistant/files/:fileId?purpose=open|download|share answers the bytes. Getting a file that a
+// connected system returned is recorded in the download audit, with the purpose.
+
+export interface FileInfo {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  /** upload: the person attached it. system: a connected system returned it, e.g. a report. */
+  origin: 'upload' | 'system';
+  /** The connected system that returned it, for origin "system". */
+  system: string | null;
+  /** For a file attached from a folder, its path inside that folder, e.g. "site-a/photo-1.jpg". */
+  relativePath: string | null;
+  /** Pixel size, for images. */
+  width: number | null;
+  height: number | null;
+  createdAt: string;
+}
+
+export type FilePurpose = 'open' | 'download' | 'share';
 
 export interface DecisionRequest {
   confirmationId: string;
@@ -125,12 +152,20 @@ export interface ConfirmationPart {
   changes: ConfirmationChange[];
 }
 
-export type MessagePart = TextPart | ActivityPart | ConfirmationPart;
+/** A file a connected system returned, such as a report, for the person to open, download or share. */
+export interface FilePart {
+  type: 'file';
+  file: FileInfo;
+}
+
+export type MessagePart = TextPart | ActivityPart | ConfirmationPart | FilePart;
 
 export interface UserMessage {
   id: string;
   role: 'user';
   text: string;
+  /** Files the person attached. Missing on messages saved before attachments existed. */
+  attachments?: FileInfo[];
   createdAt: string;
 }
 
@@ -262,6 +297,8 @@ export interface ApiError {
 export interface ExportRequest {
   /** IANA time zone used for the dates written in the file. */
   timeZone?: string;
+  /** How the app hands the file over: a download (web) or the share sheet (phones). Defaults to download. */
+  purpose?: Exclude<FilePurpose, 'open'>;
 }
 
 export interface ConversationExport {
@@ -292,16 +329,27 @@ export interface ExportDevice {
   appVersion: string | null;
 }
 
-/** One download of a conversation. */
+/**
+ * One time data left the server for someone's device: a conversation they exported, or a file a connected
+ * system returned that they opened, downloaded or shared.
+ */
 export interface ExportEntry {
   id: string;
+  kind: 'conversation' | 'file';
+  purpose: FilePurpose;
   user: PersonRef;
   conversationId: string;
   /** The title when it was exported (the conversation may since have been renamed or deleted). */
   conversationTitle: string;
+  /** For kind "file": the connected system the file came from. */
+  source: string | null;
+  /** For kind "file": the file's id. */
+  fileId: string | null;
   filename: string;
+  mimeType: string;
   sizeBytes: number;
-  messageCount: number;
+  /** For kind "conversation": how many messages it held. */
+  messageCount: number | null;
   sha256: string;
   ip: string | null;
   device: ExportDevice | null;
@@ -309,8 +357,11 @@ export interface ExportEntry {
 }
 
 export interface ExportDetail extends ExportEntry {
-  /** Exactly what was downloaded. */
-  content: string;
+  /**
+   * Exactly what was downloaded, for text (conversation exports). For other files it is null: the copy kept
+   * with the record is served by GET /admin/exports/:exportId/file, and that access is recorded too.
+   */
+  content: string | null;
   userAgent: string | null;
   /** The time zone the person's device reported. */
   timeZone: string | null;
@@ -333,10 +384,15 @@ export interface WeeklyUserSummary {
   changesConfirmed: number;
   changesCancelled: number;
   changesFailed: number;
+  /** Everything that left the server for their devices: conversation exports and system files. */
   exports: number;
   exportedBytes: number;
   /** Titles of the conversations downloaded that week. */
   exportedConversations: string[];
+  /** Names of the system files (such as reports) they opened, downloaded or shared that week. */
+  downloadedFiles: string[];
+  /** Files they attached to messages. */
+  uploads: number;
   lastActiveAt: string | null;
 }
 
@@ -349,6 +405,7 @@ export interface WeeklyTotals {
   changesConfirmed: number;
   exports: number;
   exportedBytes: number;
+  uploads: number;
 }
 
 export interface WeeklyReportSummary {

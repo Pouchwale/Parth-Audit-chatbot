@@ -1,12 +1,13 @@
-import { and, count, desc, eq, gte, inArray, isNotNull, lt, max, min, sql, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNotNull, lt, max, min, sql, sum, type SQL } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
-import type { WeeklyReport, WeeklyReportSummary, WeeklyUserSummary } from '@shared/api.ts';
+import type { WeeklyReport, WeeklyReportSummary, WeeklyTotals, WeeklyUserSummary } from '@shared/api.ts';
 import { one, type Db } from '../db/index.ts';
 import { actions, conversationExports, loginEvents, messageEvents, users, weeklyReports } from '../db/schema.ts';
 import { addDays, localDate, startOfDay } from '../time.ts';
 
-// Weekly reports count only the audit trail (sign-ins, messages, actions, downloads), never conversations,
-// which their owners can delete. Weeks run from Monday 00:00 to Sunday 24:00 in the report time zone.
+// Weekly reports count only the audit trail (sign-ins, messages and the files attached to them, actions, downloads),
+// never conversations or files, which their owners can delete. Weeks run from Monday 00:00 to Sunday 24:00 in the
+// report time zone.
 // Lookups and changes count in the week they finished: a change proposed on Sunday night and confirmed on Monday
 // counts on Monday, because Sunday's week may already be stored by then.
 
@@ -30,7 +31,7 @@ export async function weekSummaries(db: Db, zone: string, limit: number, now = n
     .where(lt(weeklyReports.weekStart, current.weekStart))
     .orderBy(desc(weeklyReports.weekStart))
     .limit(limit);
-  return [current, ...stored.map((row) => row.summary)];
+  return [current, ...stored.map(({ summary }) => ({ ...summary, totals: totalsUpToDate(summary.totals) }))];
 }
 
 /**
@@ -42,7 +43,7 @@ export async function weekReport(db: Db, zone: string, weekStart: string, now = 
   if (weekStart > current) return undefined;
   if (weekStart === current) return compute(db, zone, weekStart, now, false);
   const [stored] = await db.select({ report: weeklyReports.report }).from(weeklyReports).where(eq(weeklyReports.weekStart, weekStart));
-  if (stored) return stored.report;
+  if (stored) return upToDate(stored.report);
   const first = await firstWeek(db, zone);
   return first && weekStart >= first ? store(db, zone, weekStart, now) : undefined;
 }
@@ -67,7 +68,21 @@ async function store(db: Db, zone: string, weekStart: string, now: Date): Promis
     .onConflictDoNothing()
     .returning({ report: weeklyReports.report });
   if (inserted) return inserted.report;
-  return one(await db.select({ report: weeklyReports.report }).from(weeklyReports).where(eq(weeklyReports.weekStart, weekStart))).report;
+  return upToDate(one(await db.select({ report: weeklyReports.report }).from(weeklyReports).where(eq(weeklyReports.weekStart, weekStart))).report);
+}
+
+// Weeks stored before uploads and downloaded files were counted lack them: they are served as none.
+
+function upToDate(report: WeeklyReport): WeeklyReport {
+  return {
+    ...report,
+    totals: totalsUpToDate(report.totals),
+    users: report.users.map((user) => ({ ...user, uploads: user.uploads ?? 0, downloadedFiles: user.downloadedFiles ?? [] })),
+  };
+}
+
+function totalsUpToDate(totals: WeeklyTotals): WeeklyTotals {
+  return { ...totals, uploads: totals.uploads ?? 0 };
 }
 
 /** The week of the earliest activity on record, if there is any. */
@@ -102,7 +117,12 @@ async function compute(db: Db, zone: string, weekStart: string, now: Date, compl
       .where(and(during(loginEvents.createdAt), isNotNull(loginEvents.userId)))
       .groupBy(loginEvents.userId),
     db
-      .select({ userId: messageEvents.userId, count: count(), last: max(messageEvents.createdAt) })
+      .select({
+        userId: messageEvents.userId,
+        count: count(),
+        attachments: sum(messageEvents.attachments).mapWith(Number),
+        last: max(messageEvents.createdAt),
+      })
       .from(messageEvents)
       .where(and(during(messageEvents.createdAt), isNotNull(messageEvents.userId)))
       .groupBy(messageEvents.userId),
@@ -121,7 +141,9 @@ async function compute(db: Db, zone: string, weekStart: string, now: Date, compl
     db
       .select({
         userId: conversationExports.userId,
+        kind: conversationExports.kind,
         title: conversationExports.conversationTitle,
+        filename: conversationExports.filename,
         sizeBytes: conversationExports.sizeBytes,
         at: conversationExports.createdAt,
       })
@@ -133,13 +155,14 @@ async function compute(db: Db, zone: string, weekStart: string, now: Date, compl
   const signInsBy = byUser(signIns);
   const messagesBy = byUser(messages);
   const actionsBy = byUser(actionCounts);
-  const downloadsBy = new Map<string, { count: number; bytes: number; titles: Set<string>; last: Date }>();
+  const downloadsBy = new Map<string, { count: number; bytes: number; titles: Set<string>; files: Set<string>; last: Date }>();
   for (const row of downloads) {
     if (!row.userId) continue;
-    const tally = downloadsBy.get(row.userId) ?? { count: 0, bytes: 0, titles: new Set<string>(), last: row.at };
+    const tally = downloadsBy.get(row.userId) ?? { count: 0, bytes: 0, titles: new Set<string>(), files: new Set<string>(), last: row.at };
     tally.count += 1;
     tally.bytes += row.sizeBytes;
-    tally.titles.add(row.title);
+    if (row.kind === 'conversation') tally.titles.add(row.title);
+    else tally.files.add(row.filename);
     tally.last = row.at;
     downloadsBy.set(row.userId, tally);
   }
@@ -167,6 +190,8 @@ async function compute(db: Db, zone: string, weekStart: string, now: Date, compl
         exports: download?.count ?? 0,
         exportedBytes: download?.bytes ?? 0,
         exportedConversations: [...(download?.titles ?? [])],
+        downloadedFiles: [...(download?.files ?? [])],
+        uploads: message?.attachments ?? 0,
         lastActiveAt: times.length > 0 ? new Date(Math.max(...times)).toISOString() : null,
       };
     })
@@ -192,6 +217,7 @@ async function compute(db: Db, zone: string, weekStart: string, now: Date, compl
       changesConfirmed: total((s) => s.changesConfirmed),
       exports: total((s) => s.exports),
       exportedBytes: total((s) => s.exportedBytes),
+      uploads: total((s) => s.uploads),
     },
     users: summaries,
   };
@@ -199,7 +225,9 @@ async function compute(db: Db, zone: string, weekStart: string, now: Date, compl
 
 /** How much a person did in the week, which orders the report. */
 function activity(s: WeeklyUserSummary): number {
-  return s.signIns + s.failedSignIns + s.messages + s.lookups + s.changesConfirmed + s.changesCancelled + s.changesFailed + s.exports;
+  return (
+    s.signIns + s.failedSignIns + s.messages + s.uploads + s.lookups + s.changesConfirmed + s.changesCancelled + s.changesFailed + s.exports
+  );
 }
 
 function byUser<Row extends { userId: string | null }>(rows: Row[]): Map<string, Row> {

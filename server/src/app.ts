@@ -13,6 +13,8 @@ import type { Config } from './config.ts';
 import type { Registry } from './connectors/registry.ts';
 import type { Db } from './db/index.ts';
 import { registerExportRoutes } from './exports/routes.ts';
+import { registerFileRoutes } from './files/routes.ts';
+import type { ImageReader } from './files/vision.ts';
 import { errorResponse } from './http.ts';
 import { registerVoiceRoutes } from './voice/routes.ts';
 import type { Transcriber } from './voice/transcriber.ts';
@@ -25,6 +27,8 @@ export interface AppDeps {
   /** Names new conversations. Without it, a conversation is named after the start of its first message. */
   titler?: Titler;
   transcriber: Transcriber;
+  /** Describes the photos people attach, for the model. */
+  imageReader: ImageReader;
 }
 
 export async function buildApp(deps: AppDeps, options: { logger?: FastifyServerOptions['logger'] } = {}) {
@@ -49,6 +53,7 @@ export async function buildApp(deps: AppDeps, options: { logger?: FastifyServerO
   registerAssistantRoutes(app, deps);
   registerHistoryRoutes(app, deps);
   registerExportRoutes(app, deps);
+  registerFileRoutes(app, deps);
   registerVoiceRoutes(app, deps);
   registerAdminRoutes(app, deps);
   registerExportAuditRoutes(app, deps);

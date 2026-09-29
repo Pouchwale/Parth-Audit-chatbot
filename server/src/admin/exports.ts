@@ -5,6 +5,8 @@ import type { ExportDetail, ExportEntry, ExportPage } from '@shared/api.ts';
 import type { AppDeps } from '../app.ts';
 import { requireSession, requireSuperAdmin } from '../auth/sessions.ts';
 import { conversationExports } from '../db/schema.ts';
+import { recordFileDownload } from '../exports/audit.ts';
+import { sendFile } from '../files/send.ts';
 import { HttpError, noStore, parseBody } from '../http.ts';
 import { addDays, startOfDay } from '../time.ts';
 
@@ -58,15 +60,20 @@ const ListQuery = z.object({
 
 const ExportParams = z.object({ exportId: z.uuid() });
 
-// Everything but the file itself, which only the detail view returns.
+// Everything but what was handed out, which only the detail view (a conversation's text) and the file route return.
 const entryFields = {
   id: conversationExports.id,
+  kind: conversationExports.kind,
+  purpose: conversationExports.purpose,
   userId: conversationExports.userId,
   username: conversationExports.username,
   displayName: conversationExports.displayName,
   conversationId: conversationExports.conversationId,
   conversationTitle: conversationExports.conversationTitle,
+  source: conversationExports.source,
+  fileId: conversationExports.fileId,
   filename: conversationExports.filename,
+  mimeType: conversationExports.mimeType,
   sizeBytes: conversationExports.sizeBytes,
   messageCount: conversationExports.messageCount,
   sha256: conversationExports.sha256,
@@ -77,7 +84,7 @@ const entryFields = {
 
 type EntryRow = Pick<typeof conversationExports.$inferSelect, keyof typeof entryFields>;
 
-/** Every conversation download, for super admins tracing where data went. */
+/** Everything that left the server for someone's device, for super admins tracing where data went. */
 export function registerExportAuditRoutes(app: FastifyInstance, deps: AppDeps) {
   const guard = { onRequest: noStore, preHandler: [requireSession(deps), requireSuperAdmin] };
   const { db } = deps;
@@ -113,11 +120,37 @@ export function registerExportAuditRoutes(app: FastifyInstance, deps: AppDeps) {
 
   app.get('/admin/exports/:exportId', guard, async (request): Promise<ExportDetail> => {
     const { exportId } = parseBody(ExportParams, request.params);
-    const [row] = await db.select().from(conversationExports).where(eq(conversationExports.id, exportId));
-    if (!row) throw new HttpError(404, 'not_found', 'No such download.');
+    const [row] = await db
+      .select({ ...entryFields, content: conversationExports.content, userAgent: conversationExports.userAgent, timeZone: conversationExports.timeZone })
+      .from(conversationExports)
+      .where(eq(conversationExports.id, exportId));
+    if (!row) throw noSuchDownload();
     return { ...entry(row), content: row.content, userAgent: row.userAgent, timeZone: row.timeZone };
   });
+
+  // The copy of a file kept with its record. Seeing it hands the data out again, so this is recorded too, as the
+  // admin opening that file.
+  app.get('/admin/exports/:exportId/file', { ...guard, exposeHeadRoute: false }, async (request, reply) => {
+    const { exportId } = parseBody(ExportParams, request.params);
+    const [row] = await db.select().from(conversationExports).where(eq(conversationExports.id, exportId));
+    if (!row) throw noSuchDownload();
+    if (row.kind !== 'file' || !row.contentBytes || !row.fileId || !row.source) {
+      throw new HttpError(404, 'no_file', 'This download has no recorded file. Its content is in its details.');
+    }
+    const copy = { filename: row.filename, mimeType: row.mimeType, data: row.contentBytes };
+    await recordFileDownload(db, request, {
+      ...copy,
+      purpose: 'open',
+      conversationId: row.conversationId,
+      conversationTitle: row.conversationTitle,
+      source: row.source,
+      fileId: row.fileId,
+    });
+    return sendFile(reply, copy, 'inline', 'no-store');
+  });
 }
+
+const noSuchDownload = () => new HttpError(404, 'not_found', 'No such download.');
 
 /** From the start of a date, or from a date and time. */
 function since(value: string, zone: string) {
@@ -141,7 +174,7 @@ function instant(iso: string): SQL {
   return sql`${iso}::timestamptz`;
 }
 
-/** An export id, a fingerprint or the start of one, or part of the title, file name or person's name. */
+/** An export id, a fingerprint or the start of one, or part of the title, file name, system or person's name. */
 function matching(q: string): SQL | undefined {
   const text = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
   const hex = q.toLowerCase();
@@ -150,6 +183,7 @@ function matching(q: string): SQL | undefined {
     SHA256_PREFIX.test(q) ? (hex.length === 64 ? eq(conversationExports.sha256, hex) : like(conversationExports.sha256, `${hex}%`)) : undefined,
     ilike(conversationExports.conversationTitle, text),
     ilike(conversationExports.filename, text),
+    ilike(conversationExports.source, text),
     ilike(conversationExports.username, text),
     ilike(conversationExports.displayName, text),
   );
@@ -158,11 +192,16 @@ function matching(q: string): SQL | undefined {
 function entry(row: EntryRow): ExportEntry {
   return {
     id: row.id,
+    kind: row.kind,
+    purpose: row.purpose,
     // The name is kept as it was when the file was downloaded. The id is empty once the account has been deleted.
     user: { id: row.userId ?? '', username: row.username, displayName: row.displayName },
     conversationId: row.conversationId,
     conversationTitle: row.conversationTitle,
+    source: row.source,
+    fileId: row.fileId,
     filename: row.filename,
+    mimeType: row.mimeType,
     sizeBytes: row.sizeBytes,
     messageCount: row.messageCount,
     sha256: row.sha256,

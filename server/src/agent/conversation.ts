@@ -3,7 +3,7 @@ import type { ChatMessage } from '@shared/api.ts';
 import { one, type Db } from '../db/index.ts';
 import { conversations, users, type PendingConfirmation } from '../db/schema.ts';
 import { HttpError } from '../http.ts';
-import type { Message } from './model.ts';
+import type { HistoryMessage } from './messages.ts';
 
 const LOCK_MS = 10 * 60_000;
 // Every request runs the model on the one shared Groq key, so no one person can keep many going at once.
@@ -13,8 +13,8 @@ const MAX_RUNNING_PER_PERSON = 3;
 export interface WorkingConversation {
   id: string;
   title: string | null;
-  /** The history sent to the model. */
-  messages: Message[];
+  /** The history the model is sent, with attached files as their ids. */
+  messages: HistoryMessage[];
   /** What the person sees. */
   transcript: ChatMessage[];
   pending: PendingConfirmation | null;
@@ -22,6 +22,8 @@ export interface WorkingConversation {
   save(options?: { unlock?: boolean }): Promise<void>;
   /** Ends the request's hold without saving anything. */
   release(): Promise<void>;
+  /** Deletes a conversation the request started, before anything was saved in it. */
+  discard(): Promise<void>;
 }
 
 export interface Owner {
@@ -75,6 +77,9 @@ function working(db: Db, row: typeof conversations.$inferSelect, sessionId: stri
     },
     release: async () => {
       await db.update(conversations).set({ lockedUntil: null }).where(eq(conversations.id, conv.id));
+    },
+    discard: async () => {
+      await db.delete(conversations).where(eq(conversations.id, conv.id));
     },
   };
   return conv;

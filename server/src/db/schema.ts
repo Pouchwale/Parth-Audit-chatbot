@@ -1,6 +1,8 @@
 import { boolean, date, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import type { Message, ToolMessage } from '../agent/model.ts';
+import type { HistoryMessage } from '../agent/messages.ts';
+import type { ToolMessage } from '../agent/model.ts';
 import type { ActionStatus, ChatMessage, DeviceInfo, ExportDevice, WeeklyReport } from '@shared/api.ts';
+import { bytea } from './bytea.ts';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 
@@ -103,8 +105,8 @@ export interface PendingConfirmation {
   calls: PendingCall[];
 }
 
-// A conversation as the person sees it (transcript) and as the model works on it (messages: the full
-// history sent to the model). Every request saves the two together.
+// A conversation as the person sees it (transcript) and as the model works on it (messages: the history sent to the
+// model, with attached files as their ids). Every request saves the two together.
 export const conversations = pgTable(
   'conversations',
   {
@@ -115,7 +117,7 @@ export const conversations = pgTable(
     sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'set null' }),
     title: text('title'),
     transcript: jsonb('transcript').$type<ChatMessage[]>().notNull().default([]),
-    messages: jsonb('messages').$type<Message[]>().notNull(),
+    messages: jsonb('messages').$type<HistoryMessage[]>().notNull(),
     pending: jsonb('pending').$type<PendingConfirmation>(),
     lockedUntil: at('locked_until'),
     createdAt: at('created_at').notNull().defaultNow(),
@@ -158,30 +160,71 @@ export const messageEvents = pgTable(
     sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'set null' }),
     conversationId: uuid('conversation_id').notNull(),
     chars: integer('chars').notNull(),
+    // How many files were attached to the message.
+    attachments: integer('attachments').notNull().default(0),
     createdAt: at('created_at').notNull().defaultNow(),
   },
   (t) => [index('message_events_created_at').on(t.createdAt)],
 );
 
-// Every conversation download (the Share button), with exactly what was handed out. This is the audit trail for
-// data leaving the system, so it outlives the conversation and even the account: nothing that deletes those
-// deletes these, and each row keeps its own copy of who, what and from where.
+// Files people attach (uploads) and files connected systems return (such as reports). They hold copies of business
+// data, so they go with their conversation, and an upload never attached to a message is deleted after a day.
+export const files = pgTable(
+  'files',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    // Set when an upload is attached to a message, or when a connected system returns the file.
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'cascade' }),
+    origin: text('origin', { enum: ['upload', 'system'] }).notNull(),
+    connectorId: text('connector_id'),
+    actionId: uuid('action_id').references(() => actions.id, { onDelete: 'set null' }),
+    filename: text('filename').notNull(),
+    relativePath: text('relative_path'),
+    mimeType: text('mime_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    sha256: text('sha256').notNull(),
+    width: integer('width'),
+    height: integer('height'),
+    data: bytea('data').notNull(),
+    // What the model is given: the text extracted from a document, or the image reader's description of a picture.
+    text: text('text'),
+    // ok: text holds it. none: nothing readable was found. unsupported: a kind of file that can't be read.
+    // failed: reading it went wrong. pending: not read yet.
+    textStatus: text('text_status', { enum: ['none', 'ok', 'unsupported', 'failed', 'pending'] }).notNull(),
+    createdAt: at('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('files_conversation_id').on(t.conversationId), index('files_created_at').on(t.createdAt)],
+);
+
+// Every time data left the server for someone's device, with exactly what was handed out: a conversation they
+// downloaded (the Share button), or a file a connected system returned that they opened, downloaded or shared. This
+// is the audit trail for data leaving the system, so it outlives the conversation, the file and even the account:
+// nothing that deletes those deletes these, and each row keeps its own copy of who, what and from where.
 export const conversationExports = pgTable(
   'conversation_exports',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    kind: text('kind', { enum: ['conversation', 'file'] }).notNull().default('conversation'),
+    purpose: text('purpose', { enum: ['open', 'download', 'share'] }).notNull().default('download'),
     userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
     username: text('username').notNull(),
     displayName: text('display_name').notNull(),
     sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'set null' }),
     conversationId: uuid('conversation_id').notNull(),
     conversationTitle: text('conversation_title').notNull(),
+    // For a file: the connected system it came from, and its id in files.
+    source: text('source'),
+    fileId: uuid('file_id'),
     filename: text('filename').notNull(),
     mimeType: text('mime_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),
-    messageCount: integer('message_count').notNull(),
+    // For a conversation: how many messages it held.
+    messageCount: integer('message_count'),
     sha256: text('sha256').notNull(),
-    content: text('content').notNull(),
+    // What was handed out: a conversation's text, or a file's bytes.
+    content: text('content'),
+    contentBytes: bytea('content_bytes'),
     ip: text('ip'),
     userAgent: text('user_agent'),
     device: jsonb('device').$type<ExportDevice>(),

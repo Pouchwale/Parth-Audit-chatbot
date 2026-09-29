@@ -16,6 +16,9 @@ const Env = z.object({
   GROQ_REASONING_EFFORT: z.enum(['', 'low', 'medium', 'high']).default('medium'),
   GROQ_TITLE_MODEL: z.string().default('openai/gpt-oss-20b'),
   GROQ_TRANSCRIPTION_MODEL: z.string().default('whisper-large-v3-turbo'),
+  GROQ_VISION_MODEL: z.string().default('qwen/qwen3.8-27b'),
+  FILE_MAX_MB: z.coerce.number().positive().default(20),
+  FILE_TEXT_CHARS: z.coerce.number().int().positive().default(16_000),
   DCRS_BASE_URL: z.url().optional(),
   TRUST_PROXY: z.string().optional(),
   CORS_ORIGINS: z.string().default('http://localhost:8081,http://127.0.0.1:8081'),
@@ -44,6 +47,15 @@ export interface Config {
   titleModel: string;
   /** Turns voice recordings into text. */
   transcriptionModel: string;
+  /** Reads the photos people attach. It must accept images; the chat models don't. */
+  visionModel: string;
+  /** The largest file a person can attach. */
+  fileMaxBytes: number;
+  /**
+   * How much of the attached files' text the model is given in one request, in characters across the whole
+   * conversation. About four characters make a token, and the request must fit the key's tokens-per-minute limit.
+   */
+  fileTextChars: number;
   dcrsBaseUrl: string | undefined;
   trustProxy: boolean | string[] | ((address: string, hop: number) => boolean);
   corsOrigins: string[];
@@ -75,6 +87,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     reasoningEffort: e.GROQ_REASONING_EFFORT,
     titleModel: e.GROQ_TITLE_MODEL,
     transcriptionModel: e.GROQ_TRANSCRIPTION_MODEL,
+    visionModel: e.GROQ_VISION_MODEL,
+    fileMaxBytes: Math.floor(e.FILE_MAX_MB * 1024 * 1024),
+    fileTextChars: e.FILE_TEXT_CHARS,
     dcrsBaseUrl: e.DCRS_BASE_URL,
     trustProxy: parseTrustProxy(e.TRUST_PROXY),
     corsOrigins: list(e.CORS_ORIGINS),

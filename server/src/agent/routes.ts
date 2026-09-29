@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AssistantReply, Capabilities, DecisionRequest, MessageRequest, RetryRequest } from '@shared/api.ts';
 import type { AppDeps } from '../app.ts';
 import { authOf, endSession, requireSession } from '../auth/sessions.ts';
+import { MAX_ATTACHMENTS } from '../files/attachments.ts';
 import { errorResponse, parseBody } from '../http.ts';
 import { eventStream } from '../sse.ts';
 import { decide, retry, sendMessage, signInExpired, type Turn, type TurnResult, type TurnStream } from './agent.ts';
@@ -14,6 +15,7 @@ const MessageBody = z.object({
   text: z.string().trim().min(1).max(4000),
   timeZone: z.string().max(100).optional(),
   stream: z.boolean().optional(),
+  attachments: z.array(z.uuid()).max(MAX_ATTACHMENTS, `A message can carry at most ${MAX_ATTACHMENTS} files.`).optional(),
 }) satisfies z.ZodType<MessageRequest>;
 
 const DecisionBody = z.object({
@@ -44,7 +46,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: AppDeps) {
 
   app.post('/assistant/messages', runsTurn, async (request, reply) => {
     const body = parseBody(MessageBody, request.body);
-    return answer(deps, request, reply, body, (turn) => sendMessage(turn, body.conversationId, body.text));
+    return answer(deps, request, reply, body, (turn) => sendMessage(turn, body.conversationId, body.text, body.attachments));
   });
 
   app.post('/assistant/conversations/:conversationId/decision', runsTurn, async (request, reply) => {

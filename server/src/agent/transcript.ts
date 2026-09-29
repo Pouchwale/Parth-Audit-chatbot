@@ -5,14 +5,17 @@ import type {
   AssistantMessage,
   ChatMessage,
   ConfirmationPart,
+  FileInfo,
+  FilePart,
+  MessagePart,
   StreamEvent,
   TextPart,
   UserMessage,
 } from '@shared/api.ts';
 import type { PendingConfirmation } from '../db/schema.ts';
 
-export function newUserMessage(text: string): UserMessage {
-  return { id: randomUUID(), role: 'user', text, createdAt: new Date().toISOString() };
+export function newUserMessage(text: string, attachments: FileInfo[]): UserMessage {
+  return { id: randomUUID(), role: 'user', text, attachments, createdAt: new Date().toISOString() };
 }
 
 export function newAssistantMessage(): AssistantMessage {
@@ -73,7 +76,7 @@ export interface MessageWriter {
   /** Removes the text of a response that failed part-way. */
   discardResponse(): void;
   /** Adds a part, or replaces the part with the same id. Call again after changing a part's status. */
-  put(part: ActivityPart | ConfirmationPart): void;
+  put(part: ActivityPart | ConfirmationPart | FilePart): void;
 }
 
 /** Writes an assistant message part by part, sending each change on as it happens. */
@@ -112,12 +115,17 @@ export function messageWriter(message: AssistantMessage, send: (event: StreamEve
       current = undefined;
     },
     put(part) {
-      const found = message.parts.findIndex((p) => p.type !== 'text' && p.type === part.type && p.id === part.id);
+      const found = message.parts.findIndex((p) => p.type === part.type && partId(p) === partId(part));
       const index = found === -1 ? message.parts.length : found;
       message.parts[index] = part;
       send({ type: 'part', index, part });
     },
   };
+}
+
+function partId(part: MessagePart): string | undefined {
+  if (part.type === 'text') return undefined;
+  return part.type === 'file' ? part.file.id : part.id;
 }
 
 /** The start of the latest message that says something, for the history list. */

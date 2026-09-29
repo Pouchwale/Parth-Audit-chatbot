@@ -8,8 +8,9 @@ import type { Titler } from '../src/agent/titles.ts';
 import { buildApp } from '../src/app.ts';
 import type { Config } from '../src/config.ts';
 import { createRegistry } from '../src/connectors/registry.ts';
-import { ConnectorError, defineAction, type Connector } from '../src/connectors/types.ts';
+import { ConnectorError, defineAction, type Action, type Connector } from '../src/connectors/types.ts';
 import { openDatabase, type Database } from '../src/db/index.ts';
+import type { Image, ImageReader } from '../src/files/vision.ts';
 import type { Recording } from '../src/voice/transcriber.ts';
 
 export function testConfig(overrides: Partial<Config> = {}): Config {
@@ -28,6 +29,9 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     reasoningEffort: '',
     titleModel: 'test-title-model',
     transcriptionModel: 'test-transcription-model',
+    visionModel: 'test-vision-model',
+    fileMaxBytes: 20 * 1024 * 1024,
+    fileTextChars: 60_000,
     dcrsBaseUrl: undefined,
     trustProxy: false,
     corsOrigins: [],
@@ -41,8 +45,8 @@ interface Item {
   status: 'open' | 'closed';
 }
 
-/** A pretend connected system with a few items that can be listed and closed. */
-export function fakeSystem() {
+/** A pretend connected system with a few items that can be listed and closed, and any other actions a test adds. */
+export function fakeSystem(extraActions: readonly Action[] = []) {
   const items = new Map<string, Item>([
     ['12', { id: '12', title: 'Fire exit blocked', status: 'open' }],
     ['13', { id: '13', title: 'Missing calibration label', status: 'open' }],
@@ -85,6 +89,7 @@ export function fakeSystem() {
           return item;
         },
       }),
+      ...extraActions,
     ],
     async authenticate(username, password) {
       if (passwords[username] !== password) throw new ConnectorError('invalid_credentials', 'Wrong username or password.');
@@ -180,7 +185,7 @@ let shared: Promise<Database> | undefined;
 async function emptyDatabase(): Promise<Database> {
   shared ??= openDatabase('memory://');
   const database = await shared;
-  await database.db.execute(sql`truncate users, sessions, connector_credentials, login_events, conversations, actions, message_events, conversation_exports, weekly_reports cascade`);
+  await database.db.execute(sql`truncate users, sessions, connector_credentials, login_events, conversations, actions, message_events, files, conversation_exports, weekly_reports cascade`);
   return database;
 }
 
@@ -196,15 +201,36 @@ function fakeTranscriber() {
   return { recordings, state, transcriber };
 }
 
-export async function setup(overrides: Partial<Config> = {}, options: { titler?: Titler } = {}) {
+/** Stands in for the image reader: records each image and describes it as `state.text`, or fails with `state.error`. */
+function fakeImageReader() {
+  const images: Image[] = [];
+  const state: { text: string; error?: Error } = { text: 'A fire exit blocked by two pallets.' };
+  const imageReader: ImageReader = async (image) => {
+    images.push(image);
+    if (state.error) throw state.error;
+    return state.text;
+  };
+  return { images, state, imageReader };
+}
+
+export async function setup(overrides: Partial<Config> = {}, options: { titler?: Titler; actions?: readonly Action[] } = {}) {
   const config = testConfig(overrides);
   const database = await emptyDatabase();
-  const system = fakeSystem();
+  const system = fakeSystem(options.actions);
   const scripted = scriptedModel();
   const voice = fakeTranscriber();
+  const vision = fakeImageReader();
   const registry = createRegistry([system.connector], 'fake');
   const app = await buildApp(
-    { config, db: database.db, registry, model: scripted.model, transcriber: voice.transcriber, ...options },
+    {
+      config,
+      db: database.db,
+      registry,
+      model: scripted.model,
+      transcriber: voice.transcriber,
+      imageReader: vision.imageReader,
+      ...(options.titler ? { titler: options.titler } : {}),
+    },
     { logger: false },
   );
 
@@ -252,6 +278,7 @@ export async function setup(overrides: Partial<Config> = {}, options: { titler?:
     system,
     model: scripted,
     voice,
+    vision,
     login,
     signIn,
     as,

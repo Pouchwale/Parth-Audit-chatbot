@@ -151,9 +151,17 @@ async function streamCompletion(
 
 /** Groq rejected a tool call it couldn't parse: before the response (400) or part-way through a stream. */
 export function isFailedToolCall(error: unknown): boolean {
-  if (!(error instanceof Groq.APIError)) return false;
+  return error instanceof Groq.APIError && groqErrorCode(error) === 'tool_use_failed';
+}
+
+/** Groq turned the request down for its size: more tokens than the model, or the key's tier, takes in one request. */
+export function isRequestTooLarge(error: unknown): boolean {
+  return error instanceof Groq.APIError && (error.status === 413 || groqErrorCode(error) === 'context_length_exceeded');
+}
+
+function groqErrorCode(error: InstanceType<typeof Groq.APIError>): string | undefined {
   const body = error.error as { code?: string; error?: { code?: string } } | undefined;
-  return (body?.error?.code ?? body?.code) === 'tool_use_failed';
+  return body?.error?.code ?? body?.code;
 }
 
 /** Turns a failed Groq call into an error that is safe to show the person. Other errors are returned unchanged. */

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { AccountDetail, AccountSummary, ActionEntry, LoginEntry, SessionEntry } from '@shared/api.ts';
 import type { AppDeps } from '../app.ts';
 import { activeSession, endSession, requireSession, requireSuperAdmin, roleOf, type SessionRow, type UserRow } from '../auth/sessions.ts';
+import { connectorName } from '../connectors/registry.ts';
 import { actions, loginEvents, sessions, users } from '../db/schema.ts';
 import { HttpError, parseBody } from '../http.ts';
 
@@ -83,7 +84,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AppDeps) {
   function actionEntry(row: ActionRow): ActionEntry {
     return {
       id: row.id,
-      system: deps.registry.connectors.find((c) => c.id === row.connectorId)?.name ?? row.connectorId,
+      system: connectorName(deps.registry, row.connectorId),
       action: row.action,
       kind: row.kind,
       summary: row.summary,

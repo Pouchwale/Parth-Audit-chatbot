@@ -45,3 +45,8 @@ export function createRegistry(connectors: readonly Connector[], signInConnector
     find: (toolName) => byTool.get(toolName),
   };
 }
+
+/** A connected system's name, or its id when it is no longer registered. */
+export function connectorName(registry: Registry, connectorId: string): string {
+  return registry.connectors.find((c) => c.id === connectorId)?.name ?? connectorId;
+}

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { AssistantReply, ChatMessage, ConversationExport, CurrentUser, ExportDetail, ExportPage } from '@shared/api.ts';
+import type { AssistantReply, ChatMessage, ConversationExport, CurrentUser, ExportDetail, ExportPage, FileInfo } from '@shared/api.ts';
 import { conversationExports, conversations } from '../src/db/schema.ts';
 import { exportFile } from '../src/exports/document.ts';
 import { expireStaleWork } from '../src/maintenance.ts';
@@ -171,6 +171,47 @@ This file was exported from Audit Assistant by alice on Monday, 28 September 202
   expect(long.length).toBeLessThanOrEqual(60 + '-2026-09-27.md'.length);
 });
 
+it('lists the files attached to a message and the files systems handed over', () => {
+  const file = (filename: string, mimeType: string, sizeBytes: number, more: Partial<FileInfo> = {}): FileInfo => ({
+    id: filename,
+    filename,
+    mimeType,
+    sizeBytes,
+    origin: 'upload',
+    system: null,
+    relativePath: null,
+    width: null,
+    height: null,
+    createdAt: '2026-09-27T05:50:00.000Z',
+    ...more,
+  });
+  const { content } = exportFile({
+    ...baseInput,
+    messages: [
+      {
+        id: 'u1',
+        role: 'user',
+        text: 'Here they are',
+        attachments: [file('photo-1.jpg', 'image/jpeg', 250_000, { relativePath: 'site-a/photo-1.jpg' }), file('notes.txt', 'text/plain', 120)],
+        createdAt: '2026-09-27T05:50:00.000Z',
+      },
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'file', file: file('report.pdf', 'application/pdf', 1_500_000, { origin: 'system', system: 'Fake Records' }) },
+          { type: 'text', text: 'Your report is ready.' },
+        ],
+        status: 'complete',
+        error: null,
+        createdAt: '2026-09-27T05:50:01.000Z',
+      },
+    ],
+  });
+  expect(content).toContain('\n> Here they are\n\nAttached:\n- site-a/photo-1.jpg (image/jpeg, 244 KB)\n- notes.txt (text/plain, 120 bytes)\n\n');
+  expect(content).toContain('\nFile from Fake Records: report.pdf (application/pdf, 1.4 MB)\n\nYour report is ready.\n');
+});
+
 it('shows a confirmation nobody answered before it expired as expired, with none of its changes made', () => {
   const proposal = (expiresAt: string): ChatMessage => ({
     id: 'a1',
@@ -197,6 +238,22 @@ it('shows a confirmation nobody answered before it expired as expired, with none
   expect(content('2026-09-27T06:00:01.000Z')).toContain(
     '\nChanges proposed for confirmation — waiting for a decision\n- Close item 12 (Fake Records) — awaiting confirmation\n',
   );
+});
+
+it('records whether the conversation was downloaded or went to the share sheet', async () => {
+  const alice = await t.signIn('alice');
+  const { conversationId } = await ask(alice, 'Hi', 'Hello.');
+
+  expect((await share(alice, conversationId, { purpose: 'share' })).statusCode).toBe(200);
+  expect((await share(alice, conversationId, {})).statusCode).toBe(200);
+  const refused = await share(alice, conversationId, { purpose: 'open' });
+  expect(refused.statusCode).toBe(400);
+  expect(refused.json()).toMatchObject({ error: 'invalid_request' });
+  const rows = await t.db.select({ kind: conversationExports.kind, purpose: conversationExports.purpose }).from(conversationExports).orderBy(conversationExports.createdAt);
+  expect(rows).toEqual([
+    { kind: 'conversation', purpose: 'share' },
+    { kind: 'conversation', purpose: 'download' },
+  ]);
 });
 
 it("dates the file in UTC when the device's time zone is missing or unknown", async () => {
@@ -402,10 +459,15 @@ it('shows everything about one download, including exactly what was downloaded',
   expect(response.headers['cache-control']).toBe('no-store');
   expect(response.json<ExportDetail>()).toEqual({
     id: file.id,
+    kind: 'conversation',
+    purpose: 'download',
     user: { id: await userId(alice), username: 'alice', displayName: 'Alice' },
     conversationId,
     conversationTitle: 'Hi',
+    source: null,
+    fileId: null,
     filename: file.filename,
+    mimeType: 'text/markdown; charset=utf-8',
     sizeBytes: Buffer.byteLength(file.content, 'utf8'),
     messageCount: 2,
     sha256: file.sha256,

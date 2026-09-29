@@ -37,8 +37,8 @@ async function report(token: string, weekStart: string) {
 const record = {
   signIn: (userId: string, at: string, deviceId: string, success = true) =>
     t.db.insert(loginEvents).values({ userId, username: 'x', success, device: { deviceId }, createdAt: new Date(at) }),
-  message: (userId: string, at: string) =>
-    t.db.insert(messageEvents).values({ userId, conversationId: randomUUID(), chars: 12, createdAt: new Date(at) }),
+  message: (userId: string, at: string, attachments = 0) =>
+    t.db.insert(messageEvents).values({ userId, conversationId: randomUUID(), chars: 12, attachments, createdAt: new Date(at) }),
   action: (userId: string, at: string, kind: 'read' | 'write', status: ActionStatus, finishedAt: string | null = at) =>
     t.db
       .insert(actions)
@@ -67,6 +67,24 @@ const record = {
       messageCount: 2,
       sha256: 'f'.repeat(64),
       content: 'x',
+      createdAt: new Date(at),
+    }),
+  fileDownload: (user: { id: string; username: string; displayName: string }, at: string, filename: string, sizeBytes: number) =>
+    t.db.insert(conversationExports).values({
+      kind: 'file',
+      purpose: 'share',
+      userId: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      conversationId: randomUUID(),
+      conversationTitle: 'Reports',
+      source: 'Fake Records',
+      fileId: randomUUID(),
+      filename,
+      mimeType: 'application/pdf',
+      sizeBytes,
+      sha256: 'e'.repeat(64),
+      contentBytes: Buffer.alloc(sizeBytes),
       createdAt: new Date(at),
     }),
 };
@@ -102,7 +120,7 @@ it("sums up each person's week from the audit trail, busiest first", async () =>
     timeZone: 'UTC',
     complete: true,
     generatedAt: expect.any(String),
-    totals: { activeUsers: 2, signIns: 3, failedSignIns: 1, messages: 4, lookups: 2, changesConfirmed: 1, exports: 3, exportedBytes: 300 },
+    totals: { activeUsers: 2, signIns: 3, failedSignIns: 1, messages: 4, lookups: 2, changesConfirmed: 1, exports: 3, exportedBytes: 300, uploads: 0 },
     users: [
       {
         user: { id: alice.id, username: 'alice', displayName: 'Alice' },
@@ -117,6 +135,8 @@ it("sums up each person's week from the audit trail, busiest first", async () =>
         exports: 3,
         exportedBytes: 300,
         exportedConversations: ['Open items', 'Close item 12'],
+        downloadedFiles: [],
+        uploads: 0,
         lastActiveAt: '2026-03-08T23:59:59.000Z',
       },
       {
@@ -132,10 +152,61 @@ it("sums up each person's week from the audit trail, busiest first", async () =>
         exports: 0,
         exportedBytes: 0,
         exportedConversations: [],
+        downloadedFiles: [],
+        uploads: 0,
         lastActiveAt: '2026-03-04T12:00:00.000Z',
       },
     ],
   });
+});
+
+it('counts the files people attached, and names the files from systems they downloaded', async () => {
+  const alice = await account('alice');
+  const admin = await account('admin');
+  await record.message(alice.id, '2026-03-03T09:00:00Z', 3);
+  await record.message(alice.id, '2026-03-04T09:00:00Z');
+  await record.message(alice.id, '2026-03-09T00:00:00Z', 5);
+  await record.download(alice, '2026-03-05T10:00:00Z', 'Open items', 100);
+  await record.fileDownload(alice, '2026-03-05T11:00:00Z', 'pest-control-report-main-plant-2026-03-04.pdf', 2000);
+  await record.fileDownload(alice, '2026-03-05T11:01:00Z', 'pest-control-report-main-plant-2026-03-04.pdf', 2000);
+  await record.fileDownload(alice, '2026-03-06T08:00:00Z', 'items.csv', 50);
+
+  const week = await report(admin.token, WEEK);
+  expect(week.totals).toMatchObject({ messages: 2, uploads: 3, exports: 4, exportedBytes: 4150 });
+  expect(week.users).toMatchObject([
+    {
+      user: { id: alice.id },
+      messages: 2,
+      uploads: 3,
+      exports: 4,
+      exportedBytes: 4150,
+      exportedConversations: ['Open items'],
+      downloadedFiles: ['pest-control-report-main-plant-2026-03-04.pdf', 'items.csv'],
+    },
+  ]);
+});
+
+it('serves weeks stored before uploads and downloaded files were counted with none of them', async () => {
+  const alice = await account('alice');
+  const admin = await account('admin');
+  await record.message(alice.id, '2026-03-03T09:00:00Z', 2);
+  const stored = await report(admin.token, WEEK);
+  // The week as it was stored before those counts existed.
+  const { uploads, ...totals } = stored.totals;
+  const users = stored.users.map(({ uploads, downloadedFiles, ...user }) => user);
+  await t.db
+    .update(weeklyReports)
+    .set({ report: { ...stored, totals, users } as unknown as WeeklyReport })
+    .where(eq(weeklyReports.weekStart, WEEK));
+
+  expect(uploads).toBe(2);
+  expect(await report(admin.token, WEEK)).toEqual({
+    ...stored,
+    totals: { ...totals, uploads: 0 },
+    users: users.map((user) => ({ ...user, uploads: 0, downloadedFiles: [] })),
+  });
+  const listed = (await t.as(admin.token).get('/admin/reports/weekly')).json<WeeklyReportSummary[]>().find((week) => week.weekStart === WEEK);
+  expect(listed?.totals).toEqual({ ...totals, uploads: 0 });
 });
 
 it('stores a completed week once and never changes it', async () => {
