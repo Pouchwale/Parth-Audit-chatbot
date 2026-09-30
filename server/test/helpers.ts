@@ -239,7 +239,7 @@ export async function setup(overrides: Partial<Config> = {}, options: { titler?:
       method: 'POST',
       url: '/auth/login',
       remoteAddress: options.ip ?? '203.0.113.10',
-      headers: { 'user-agent': 'AuditAssistant/1.0 test' },
+      headers: { 'user-agent': 'Mitra/1.0 test' },
       payload: {
         username,
         password: options.password ?? `${username}-pw`,

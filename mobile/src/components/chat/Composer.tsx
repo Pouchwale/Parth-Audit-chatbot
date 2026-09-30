@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AppName } from '@/constants/brand';
 import { Radius, Spacing, useColorSchemeSetting, useTheme } from '@/constants/theme';
 import type { Attachments } from '@/lib/attachments';
 import { MAX_MESSAGE_LENGTH } from '@/lib/chat-stream';
@@ -93,7 +94,7 @@ export function Composer({
         <TextInput
           value={value}
           onChangeText={onChangeText}
-          placeholder="Message Assistant…"
+          placeholder={`Message ${AppName}…`}
           placeholderTextColor={theme.textSecondary}
           accessibilityLabel="Message"
           multiline

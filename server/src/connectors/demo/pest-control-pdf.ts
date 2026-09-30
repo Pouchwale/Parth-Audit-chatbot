@@ -44,8 +44,8 @@ export async function pestControlPdf(report: PestControlReport): Promise<Uint8Ar
   doc.setAuthor(clean(`${report.inspector}, ${report.contractor}`));
   doc.setSubject(clean(`${report.company}, ${report.site}, ${report.date}. ${SAMPLE}.`));
   doc.setKeywords(['pest control', 'daily report', report.reportNo, clean(report.site), report.date, 'sample data']);
-  doc.setCreator('Audit Assistant demo');
-  doc.setProducer('Audit Assistant');
+  doc.setCreator('Mitra demo');
+  doc.setProducer('Mitra');
   doc.setLanguage('en');
   doc.setCreationDate(writtenAt);
   doc.setModificationDate(writtenAt);

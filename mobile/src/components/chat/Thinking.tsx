@@ -1,4 +1,5 @@
 import { Animated, StyleSheet, View } from 'react-native';
+import { AppName } from '@/constants/brand';
 import { Spacing, useTheme } from '@/constants/theme';
 import { useLoop } from './useLoop';
 
@@ -14,7 +15,7 @@ export function Thinking() {
   const theme = useTheme();
   const progress = useLoop(1200);
   return (
-    <View accessible accessibilityRole="progressbar" accessibilityLabel="Assistant is thinking" style={styles.row}>
+    <View accessible accessibilityRole="progressbar" accessibilityLabel={`${AppName} is thinking`} style={styles.row}>
       {WAVES.map((wave, index) => (
         <Animated.View
           key={index}

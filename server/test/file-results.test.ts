@@ -64,7 +64,7 @@ function download(token: string, fileId: string, query = '', headers: Record<str
     method: 'GET',
     url: `/assistant/files/${fileId}${query}`,
     remoteAddress: '198.51.100.23',
-    headers: { authorization: `Bearer ${token}`, 'user-agent': 'AuditAssistant/1.3 (Android 16)', ...headers },
+    headers: { authorization: `Bearer ${token}`, 'user-agent': 'Mitra/1.3 (Android 16)', ...headers },
   });
 }
 
@@ -220,7 +220,7 @@ it('records each time a file from a system leaves for a device, with a copy of i
     sha256: sha256(CSV),
     content: null,
     ip: '198.51.100.23',
-    userAgent: 'AuditAssistant/1.3 (Android 16)',
+    userAgent: 'Mitra/1.3 (Android 16)',
     device: { name: 'Work phone', model: 'Pixel 8', os: 'Android', osVersion: '16', appVersion: '1.3.0' },
     timeZone: 'Asia/Kolkata',
   });
@@ -283,7 +283,7 @@ it('lists file downloads for super admins, and records an admin opening the kept
   expect(await found('items export')).toEqual([entry!.id]);
 
   const detail = (await t.as(admin).get(`/admin/exports/${entry!.id}`)).json<ExportDetail>();
-  expect(detail).toMatchObject({ ...entry, content: null, userAgent: 'AuditAssistant/1.3 (Android 16)', timeZone: 'Asia/Kolkata' });
+  expect(detail).toMatchObject({ ...entry, content: null, userAgent: 'Mitra/1.3 (Android 16)', timeZone: 'Asia/Kolkata' });
 
   const copy = await t.app.inject({
     method: 'GET',

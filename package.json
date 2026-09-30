@@ -1,5 +1,5 @@
 {
-  "name": "audit-assistant",
+  "name": "mitra",
   "private": true,
   "scripts": {
     "setup": "npm --prefix server install && npm --prefix mobile install",

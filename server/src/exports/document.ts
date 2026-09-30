@@ -5,7 +5,7 @@ import { localDate } from '../time.ts';
 
 export const EXPORT_MIME_TYPE = 'text/markdown; charset=utf-8';
 
-const APP_NAME = 'Audit Assistant';
+const APP_NAME = 'Mitra';
 
 export interface ExportInput {
   /** Printed in the file, so a copy that turns up somewhere can be traced back to this export. */

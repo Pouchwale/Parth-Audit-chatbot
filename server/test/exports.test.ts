@@ -22,7 +22,7 @@ function share(token: string, conversationId: string, payload?: object) {
     method: 'POST',
     url: `/assistant/conversations/${conversationId}/export`,
     remoteAddress: '198.51.100.9',
-    headers: { authorization: `Bearer ${token}`, 'user-agent': 'AuditAssistant/1.2 (Android 16)' },
+    headers: { authorization: `Bearer ${token}`, 'user-agent': 'Mitra/1.2 (Android 16)' },
     ...(payload ? { payload } : {}),
   });
 }
@@ -75,7 +75,7 @@ it('downloads a conversation as a Markdown file saying who exported it, when, an
     '\nChanges proposed for confirmation — cancelled\n' +
       '- Close item 13 with the note "done" (Fake Records) — cancelled: The person cancelled this change, so it was not made.\n',
   );
-  expect(content).toMatch(new RegExp(`\\nThis file was exported from Audit Assistant by alice on ${exportedOn}\\. Export ID ${id}\\. Every export is recorded\\.\\n$`));
+  expect(content).toMatch(new RegExp(`\\nThis file was exported from Mitra by alice on ${exportedOn}\\. Export ID ${id}\\. Every export is recorded\\.\\n$`));
 
   const [row] = await t.db.select().from(conversationExports);
   expect(row).toMatchObject({
@@ -92,7 +92,7 @@ it('downloads a conversation as a Markdown file saying who exported it, when, an
     sha256: file.sha256,
     content,
     ip: '198.51.100.9',
-    userAgent: 'AuditAssistant/1.2 (Android 16)',
+    userAgent: 'Mitra/1.2 (Android 16)',
     device: { name: 'Work phone', model: 'Pixel 8', os: 'Android', osVersion: '16', appVersion: '1.2.0' },
     timeZone: 'Asia/Kolkata',
   });
@@ -145,7 +145,7 @@ it('writes every date in the chosen time zone, with the weekday and year, and na
 > Hi
 > # not a heading
 
-## Audit Assistant · Sunday, 27 September 2026, 11:50:01
+## Mitra · Sunday, 27 September 2026, 11:50:01
 
 Hello
 
@@ -155,13 +155,13 @@ _Stopped before it finished._
 
 > Again
 
-## Audit Assistant · Sunday, 27 September 2026, 11:51:01
+## Mitra · Sunday, 27 September 2026, 11:51:01
 
 _Error: The assistant is busy._
 
 ---
 
-This file was exported from Audit Assistant by alice on Monday, 28 September 2026, 00:22:03 (Asia/Kolkata). Export ID export-1. Every export is recorded.
+This file was exported from Mitra by alice on Monday, 28 September 2026, 00:22:03 (Asia/Kolkata). Export ID export-1. Every export is recorded.
 `);
 
   const named = (title: string) => exportFile({ ...baseInput, title }).filename;
@@ -475,7 +475,7 @@ it('shows everything about one download, including exactly what was downloaded',
     device: { name: 'Work phone', model: 'Pixel 8', os: 'Android', osVersion: '16', appVersion: '1.2.0' },
     at: file.createdAt,
     content: file.content,
-    userAgent: 'AuditAssistant/1.2 (Android 16)',
+    userAgent: 'Mitra/1.2 (Android 16)',
     timeZone: 'Asia/Kolkata',
   });
   expect(response.body).not.toContain(alice);

@@ -1,8 +1,8 @@
-import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState } from 'react';
-import { KeyboardAvoidingView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, KeyboardAvoidingView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Field, Notice } from '@/components/ui';
+import { AppMark, AppName } from '@/constants/brand';
 import { Radius, Spacing, useTheme } from '@/constants/theme';
 import { api, errorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -40,10 +40,8 @@ export default function SignInScreen() {
       <KeyboardAvoidingView behavior="padding" style={styles.screen}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <View style={styles.content}>
-            <View style={[styles.logo, { backgroundColor: theme.accentSoft }]}>
-              <Ionicons name="mic" size={32} color={theme.accent} />
-            </View>
-            <Text style={[styles.title, { color: theme.text }]}>Audit Assistant</Text>
+            <Image source={AppMark} accessibilityIgnoresInvertColors style={styles.logo} />
+            <Text style={[styles.title, { color: theme.text }]}>{AppName}</Text>
             <Text style={[styles.lead, { color: theme.textSecondary }]}>
               {system ? `Sign in with your ${system} account.` : 'Sign in with your work account.'}
             </Text>
@@ -84,7 +82,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   scroll: { flexGrow: 1, justifyContent: 'center', padding: Spacing.xl },
   content: { width: '100%', maxWidth: 420, alignSelf: 'center', gap: Spacing.lg },
-  logo: { width: 64, height: 64, borderRadius: Radius.lg, alignItems: 'center', justifyContent: 'center' },
+  logo: { width: 64, height: 64, borderRadius: Radius.lg },
   title: { fontSize: 28, fontWeight: '700' },
   lead: { fontSize: 16, lineHeight: 22, marginTop: -Spacing.sm },
 });

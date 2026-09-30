@@ -6,6 +6,7 @@ import { Keyboard, Platform, Pressable, StyleSheet, Text, View } from 'react-nat
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { ConversationSummary } from '@shared/api';
 import { SearchField } from '@/components/SearchField';
+import { AppName } from '@/constants/brand';
 import { Radius, Spacing, useTheme } from '@/constants/theme';
 import { useConversations } from '@/lib/conversations';
 import { useShareConversation } from '@/lib/share';
@@ -76,7 +77,7 @@ export function ConversationDrawer({ navigation }: DrawerContentComponentProps) 
   return (
     <SafeAreaView style={styles.drawer} edges={['top', 'bottom', 'left']} {...(open ? null : CLOSED_ON_WEB)}>
       <Text accessibilityRole="header" style={[styles.appName, { color: theme.text }]}>
-        Audit Assistant
+        {AppName}
       </Text>
       <Pressable
         accessibilityRole="button"

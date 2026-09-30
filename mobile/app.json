@@ -1,20 +1,19 @@
 {
   "expo": {
-    "name": "Audit Assistant",
-    "slug": "audit-assistant",
+    "name": "Mitra",
+    "slug": "mitra",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "auditassistant",
+    "scheme": "mitra",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.pouchwale.auditassistant"
+      "bundleIdentifier": "com.pouchwale.mitra"
     },
     "android": {
-      "package": "com.pouchwale.auditassistant",
+      "package": "com.pouchwale.mitra",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#7E3C40",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -30,9 +29,9 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#7E3C40",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 180
         }
       ],
       "expo-secure-store",

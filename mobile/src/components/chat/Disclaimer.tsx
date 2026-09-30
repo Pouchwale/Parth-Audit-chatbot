@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Keyboard, Platform, StyleSheet, Text } from 'react-native';
+import { AppName } from '@/constants/brand';
 import { Spacing, useTheme } from '@/constants/theme';
 
 /**
@@ -12,7 +13,7 @@ export function Disclaimer() {
   if (keyboardShown) return null;
   return (
     <Text style={[styles.text, { color: theme.textSecondary }]}>
-      Audit Assistant can make mistakes. Double-check important details before you act on them.
+      {AppName} can make mistakes. Double-check important details before you act on them.
     </Text>
   );
 }

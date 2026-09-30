@@ -1,6 +1,6 @@
-# Audit Assistant
+# Mitra
 
-A mobile voice and chat assistant. You say or type a request in plain language, and the assistant carries it out in a connected system in one turn. It looks things up straight away, and before it changes anything it shows you exactly what will change and waits for you to confirm.
+Mitra is a mobile voice and chat assistant. You say or type a request in plain language, and the assistant carries it out in a connected system in one turn. It looks things up straight away, and before it changes anything it shows you exactly what will change and waits for you to confirm.
 
 The first connected system is the Digital Controlled Record System (DCRS). The assistant uses it only through its HTTP API.
 

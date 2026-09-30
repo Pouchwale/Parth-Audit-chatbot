@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
 import { useEffect } from 'react';
 import { Platform } from 'react-native';
+import { AppName } from '@/constants/brand';
 import { Colors, navigationTheme, useColorSchemeSetting } from '@/constants/theme';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { ConversationsProvider } from '@/lib/conversations';
@@ -56,7 +57,7 @@ function Screens() {
   return (
     <Stack screenOptions={{ headerShadowVisible: false }}>
       <Stack.Protected guard={status === 'signedIn'}>
-        <Stack.Screen name="(app)" options={{ headerShown: false, title: 'Assistant' }} />
+        <Stack.Screen name="(app)" options={{ headerShown: false, title: AppName }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
         <Stack.Screen name="viewer" options={{ title: 'File' }} />
         <Stack.Protected guard={user?.role === 'super_admin'}>

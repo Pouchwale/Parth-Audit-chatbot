@@ -23,7 +23,7 @@ it('records each sign-in with the device and IP address', async () => {
     username: 'alice',
     success: true,
     ip: '198.51.100.7',
-    userAgent: 'AuditAssistant/1.0 test',
+    userAgent: 'Mitra/1.0 test',
     device: { deviceId: 'device-alice', model: 'Pixel 8', os: 'Android', osVersion: '16' },
   });
   const [session] = await t.db.select().from(sessions);
