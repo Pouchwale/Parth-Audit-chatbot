@@ -120,6 +120,43 @@ A connector can also list a few `examples`, short requests people can try, which
 
 People sign in with their DCRS account. The server checks the credentials with DCRS and keeps the resulting DCRS sign-in encrypted with that device's session, so every action runs with that person's own DCRS permissions.
 
+### The DCRS connector
+
+`server/src/connectors/dcrs/` works through DCRS's API for this app (`/api/v1`, described in DCRS's `docs/chatbot-integration.md` and `docs/api/dcrs-api.openapi.json`). Set `DCRS_BASE_URL` in `server/.env` to the DCRS server's address, such as `http://192.168.1.20:4000` (see `server/.env.example`).
+
+- **Signing in.** People sign in with their DCRS email and password. The server checks them with DCRS's own sign-in, reads the person's DCRS id and name, and keeps DCRS's session token encrypted. DCRS ends every sign-in at the close of its day (6:20 pm for staff, midnight for the super admin), and the app's session ends with it, so each morning starts with signing in again. Outside the plant's working hours, for a switched-off account or after too many wrong passwords, DCRS turns the sign-in down and the person sees DCRS's own words. An account still on the password the administrator gave it must choose its own in DCRS first.
+- **As the person.** Every call carries the person's DCRS sign-in and the header `X-Client-Name: Mitra mobile app`. So DCRS applies its own department rules, working hours, checks and record steps, exactly as for its own pages, and writes each change in the record's history and in its activity log as "Through Mitra mobile app".
+- **Refusals** reach the person in DCRS's words: another department's records, outside working hours, a record that must be reopened before it can be corrected, the problems that stop a submit. When DCRS no longer accepts the sign-in, the session ends and the app asks the person to sign in again.
+- **Brief answers.** Each answer the model is given is cut to a few thousand characters (a long list keeps its first items and says how many more there are), because Groq's free tier allows 8,000 tokens a minute for the whole key.
+
+What it can do. Lookups run at once; changes are shown on a confirmation card and run only when the person confirms.
+
+| Action | Kind | What it does |
+|---|---|---|
+| `find_documents` | lookup | Finds the person's documents (formats) by words, format number or module |
+| `get_document` | lookup | One document: what it is for, who fills it in, when, its fields |
+| `todays_facts` | lookup | Today: working day or holiday, and what is due, overdue and pending |
+| `list_records` | lookup | One document's records between two dates |
+| `search_records` | lookup | Searches the words written on records |
+| `get_record` | lookup | One record: status, whether it can be edited, its fields, values and history |
+| `record_pdf` | lookup | Hands over a record as the PDF DCRS prints, to open, download or share |
+| `history_figures` | lookup | Figures from past records for a question about history |
+| `hr_master_lookup` | lookup | A person on HR Master Data (Human Resources only) |
+| `list_findings`, `get_finding` | lookup | The internal CAPA findings |
+| `list_complaints` | lookup | The customer complaints (F/MKT/05) |
+| `get_pest_control_report` | lookup | The daily pest control record (F/HR/17) of a date, as a PDF |
+| `get_pest_control_report_summary` | lookup | The same record as data |
+| `open_record` | change | Opens a document's record for a date, starting it if there is none |
+| `edit_record` | change | Changes values on a record, as DCRS's Mitra changes them |
+| `record_action` | change | Submit, verify, send back, resume, reopen for correction, cancel a correction, or delete a record |
+| `add_photo_to_record` | change | Adds a photo attached in the chat to a record's photos or scans |
+| `fill_record_with_sample_data` | change | Fills a record with sample data, marked as made up; it stays a draft |
+| `close_finding` | change | Closes a CAPA finding with a note |
+
+Not offered, as DCRS's hand-off says: moving around DCRS's own pages, its question-by-question fill and its questions with buttons (the chat does these itself), reading attachments (this server reads them itself), and changing a document's format (a design task for DCRS on a desktop).
+
+Its tests run it against a stand-in DCRS: every action, what each sends, and every refusal (`server/test/dcrs-connector.test.ts`), and sign-in, a lookup and a confirmed change through the server (`server/test/dcrs-app.test.ts`).
+
 ## Login and action logs, super admin view
 
 - **Every sign-in attempt** is recorded, successful or not, with the IP address, user agent and device (name, model, OS and version, app version).
@@ -156,4 +193,4 @@ Going over a limit returns "Too many attempts. Wait a minute and try again."
 ## Status
 
 - Done: the server, logging, super admin view, agent with confirmations, and the mobile app. Try them with `npm run demo`.
-- Waiting on details: the DCRS connector. Its sign-in and its list of allowed actions will be built from the real DCRS API once the base URL and a test account are available. Until then, `npm run server` can't sign anyone in.
+- Done: the DCRS connector ([The DCRS connector](#the-dcrs-connector)). `npm run server` signs people in with DCRS once `DCRS_BASE_URL` is set.
