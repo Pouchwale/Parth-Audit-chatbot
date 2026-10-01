@@ -21,8 +21,11 @@ const ACTION_WORDS: Record<RecordAction, { reason: boolean; say: (id: string, re
 
 /** The photo types DCRS keeps on a record. */
 const PHOTO_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-/** The largest photo DCRS keeps on a record: its own Mitra's limit, as it cannot scale a picture on the server. */
-export const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
+/**
+ * The largest photo DCRS keeps on a record (its MAX_PHOTO_BYTES): DCRS keeps photos as a 1024 px JPEG at 70%,
+ * about 60-150 KB, inside a records item every browser must hold, and cannot scale a picture on its server.
+ */
+export const MAX_PHOTO_BYTES = 512 * 1024;
 
 /** A photo from this conversation that can go on a record, or the reason it can't. */
 async function photo(files: DescribeContext['files'], fileId: string) {
@@ -34,7 +37,7 @@ async function photo(files: DescribeContext['files'], fileId: string) {
   if (file.data.byteLength > MAX_PHOTO_BYTES) {
     throw new ConnectorError(
       'invalid_request',
-      `"${file.info.filename}" is larger than 2 MB, the most DCRS keeps for a photo on a record. Send it again at a smaller size, such as 1024 pixels on its longer side.`,
+      `"${file.info.filename}" is larger than 512 KB, the most DCRS keeps for a photo on a record. Send it again at a smaller size, such as 1024 pixels on its longer side as a JPEG.`,
     );
   }
   return { ...file, type };

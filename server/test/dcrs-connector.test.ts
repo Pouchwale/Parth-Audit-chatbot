@@ -469,7 +469,7 @@ group('the actions', () => {
           fileId === 'big' ? { info: big, data: new Uint8Array(3_000_000) } : fileId === 'gif' ? { info: gif, data: new Uint8Array(4) } : ctx.files.get(fileId),
       },
     };
-    await expect(add.describe({ recordId: 'rec-1', fileId: 'big' }, withMore)).rejects.toMatchObject({ kind: 'invalid_request', message: expect.stringContaining('larger than 2 MB') });
+    await expect(add.describe({ recordId: 'rec-1', fileId: 'big' }, withMore)).rejects.toMatchObject({ kind: 'invalid_request', message: expect.stringContaining('larger than 512 KB') });
     await expect(add.describe({ recordId: 'rec-1', fileId: 'gif' }, withMore)).rejects.toMatchObject({ kind: 'invalid_request', message: expect.stringContaining('JPEG, PNG or WebP') });
     await expect(add.describe({ recordId: 'rec-1', fileId: SHEET.id }, ctx)).rejects.toMatchObject({ kind: 'invalid_request', message: expect.stringContaining('readings.xlsx') });
     await expect(add.describe({ recordId: 'rec-1', fileId: 'nope' }, ctx)).rejects.toMatchObject({ kind: 'not_found' });
