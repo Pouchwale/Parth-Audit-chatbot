@@ -68,6 +68,7 @@ You need Node 24 or later, and a Groq API key in `server/.env` (`GROQ_API_KEY=..
 | `npm run demo` | Starts the server with sample data (instead of DCRS) **and** the app, then opens the app in your browser at http://localhost:8081. Keep the window open, and press Ctrl+C to stop both. |
 | `npm run dev` | The same, but with the real server, once the DCRS connector is set up. |
 | `npm run server` / `npm run app` | Just the real server, or just the app. |
+| `npm run phones` | The app for phones in Expo Go, on port 8081, at this computer's address on the company network (see [On a phone](#on-a-phone)). |
 
 **Trying it in demo mode:** run `npm run demo` and wait for the browser to open. If it doesn't open, go to http://localhost:8081 yourself. Then:
 
@@ -77,7 +78,7 @@ You need Node 24 or later, and a Groq API key in `server/.env` (`GROQ_API_KEY=..
 4. Ask for "the daily pest control report". The assistant asks which day, then hands you a sample report as a PDF to open, download or share. Attach a photo and ask it to attach the photo to F-102 as evidence.
 5. Sign out, then sign in as `admin` with password `admin`. Open the menu at the top left and choose **Accounts** for the super admin view: each account, the devices it's signed in on, and what it last did.
 
-Voice input in a browser needs a secure address: it works at http://localhost, but not at your computer's network address over plain http (use Expo Go on a phone for that). Demo data resets when you restart. If the app says it can't reach the assistant server, the server isn't running: start it again with `npm run demo`. The message shows the address the app tried.
+Voice input in a browser needs a secure address: it works at http://localhost, but not at your computer's network address over plain http (use Expo Go on a phone for that). Demo data resets when you restart. If the app says it can't reach its server, the server isn't running: start it again with `npm run demo`. The message shows the address the app tried.
 
 ### Real mode
 
@@ -92,9 +93,22 @@ Then run `npm run dev`. In development the server uses an embedded Postgres (PGl
 
 ### On a phone
 
-Your phone and computer need to be on the same Wi-Fi. The app finds the server on its own: it uses port 3000 on the computer that runs Expo. The first time the server starts, Windows may ask whether Node.js can use the network; choose **Allow** for private networks, or the phone can't reach it. You only need `EXPO_PUBLIC_API_URL` (see `mobile/.env.example`) when the server lives somewhere else, such as in production.
+People use Mitra in **Expo Go**, Expo's free app: from the Play Store on Android phones, and the App Store on iPhones. Nothing else is installed or built: no APK, no TestFlight. The app is on Expo SDK 57, which is what Expo Go from both stores opens (Expo Go 57.0.9, 2 September 2026). Expo Go opens one SDK, the latest. When Expo releases the next SDK, the stores' Expo Go moves to it, and the app must be upgraded with `npx expo install expo@^<that SDK>.0.0 --fix`, then `npx expo install --fix` and `npx expo-doctor`, before phones update Expo Go.
 
-- **Expo Go:** run `npm run demo` (or `npm run dev`) and scan the QR code it shows in the terminal. Everything works there, voice included: the app records you, the server turns the recording into text, and replies can be read aloud. No development build is needed.
+**On the computer that runs the Mitra server** (the plant's server PC):
+
+1. Connect it to the company network the phones use. Its Wi-Fi address is in `ipconfig`, under "Wireless LAN adapter Wi-Fi", "IPv4 Address", for example 192.168.0.107.
+2. Start the Mitra server: `npm --prefix server start` (port 3000, on every network card: `HOST` is 0.0.0.0 unless set).
+3. Start the app for the phones: `npm run phones`, in its own window, and keep it open. It runs `expo start --lan --port 8081 --no-dev --minify` in `mobile/` (production mode: smaller and faster on the phones) and prints a QR code for `exp://<address>:8081`. The address is the Wi-Fi card's. To choose another, set it first, in PowerShell `$env:REACT_NATIVE_PACKAGER_HOSTNAME = "192.168.0.107"`. Expo itself would pick the card with the default route, which on a PC with a cable as well, or a WSL adapter, is often not the one the phones reach. `npm run phones -- --dev` runs it in development mode instead, which reloads when the code changes and shows errors on the phone.
+4. Let the phones in: Windows Firewall must allow ports 3000 and 8081 in. The first time each starts, Windows asks whether Node.js may use the network: tick the kind of network the PC is on and choose **Allow**. A company network should be set to **Private** (Settings, Network & internet, the connection, Network profile type). Alternatively, an administrator can open the two ports in PowerShell: `New-NetFirewallRule -DisplayName "Mitra (3000, 8081)" -Direction Inbound -Protocol TCP -LocalPort 3000,8081 -Action Allow -Profile Private,Domain`.
+
+**On each phone:** install Expo Go, join the company Wi-Fi, and scan the QR code: with Expo Go's **Scan QR code** on Android, with the Camera app on an iPhone. Mitra opens in Expo Go; next time it is under **Recently opened** in Expo Go.
+
+- **iPhone, local network.** Expo Go asks to "find and connect to devices on your local network" the first time. Tap **Allow**: without it the phone can reach neither Expo nor the Mitra server. To change it later: Settings, Privacy & Security, Local Network, Expo Go.
+- **Microphone and camera.** In Expo Go these are Expo Go's permissions, asked for Expo Go (on an iPhone in its words, "Allow Expo projects to access your microphone"). Allow them for voice and for photos. To change them later: in the phone's Settings, under Expo Go (on Android: Apps, Expo Go, Permissions). If one was refused, Mitra says to allow it for Expo Go. Photos, files and folders are picked with the phone's own pickers and need no permission, and the share sheet needs none.
+- **Finding the server.** The app finds the server on its own: port 3000 on the computer whose address is in the QR code (`mobile/src/lib/server-address.ts`). If it can't reach it, it says so with that address, and asks the person to try again, check the company Wi-Fi, then ask their administrator. You only need `EXPO_PUBLIC_API_URL` (see `mobile/.env.example`) when the server lives somewhere else.
+
+Everything works in Expo Go, voice included: the app records you, the server turns the recording into text, and replies can be read aloud. Plain http is fine there: Expo Go allows it on both Android and iPhone. For trying it on your own computer, `npm run demo` (or `npm run dev`) also shows a QR code for Expo Go in the terminal.
 
 ### Tests
 
@@ -142,6 +156,9 @@ What it can do. Lookups run at once; changes are shown on a confirmation card an
 | `record_pdf` | lookup | Hands over a record as the PDF DCRS prints, to open, download or share |
 | `history_figures` | lookup | Figures from past records for a question about history |
 | `hr_master_lookup` | lookup | A person on HR Master Data (Human Resources only) |
+| `equipment_lookup` | lookup | A machine on the equipment list, F/MNT/01, by its number, serial, model, maker or place, with DCRS's own answer (Maintenance only) |
+| `insights` | lookup | What stands out in the person's records: the headline DCRS's Mitra is given with every message, and the insights behind it |
+| `escalations` | lookup | The escalations DCRS raised for the super admin: who keeps handing records in late, or leaves them undone (the super admin only) |
 | `list_findings`, `get_finding` | lookup | The internal CAPA findings |
 | `list_complaints` | lookup | The customer complaints (F/MKT/05) |
 | `get_pest_control_report` | lookup | The daily pest control record (F/HR/17) of a date, as a PDF |

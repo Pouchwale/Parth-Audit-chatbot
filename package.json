@@ -8,6 +8,7 @@
     "test": "npm --prefix server test",
     "typecheck": "npm --prefix server run typecheck && npm --prefix mobile run typecheck",
     "server": "npm --prefix server run dev",
-    "app": "npm --prefix mobile run web"
+    "app": "npm --prefix mobile run web",
+    "phones": "node scripts/phones.mjs"
   }
 }
