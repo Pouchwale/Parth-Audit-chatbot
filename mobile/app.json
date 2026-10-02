@@ -48,7 +48,8 @@
           "photosPermission": "Allow $(PRODUCT_NAME) to use your photos so you can attach them to your requests.",
           "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera so you can attach photos to your requests."
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
