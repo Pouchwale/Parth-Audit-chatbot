@@ -185,6 +185,75 @@ export function changeForModel(answer: unknown): unknown {
   return fit(out, BUDGET.change);
 }
 
+/** A machine of the equipment list, without what is blank, and without the summary its columns already say. */
+function machineBrief(machine: unknown): unknown {
+  if (!isObj(machine)) return machine;
+  const made = [machine.month, machine.year].filter((value) => typeof value === 'string' && value).join(' ');
+  return {
+    ...pick(machine, ['machineNo', 'description', 'model', 'manufacturer', 'location', 'section', 'size']),
+    ...(made ? { made } : {}),
+    ...pick(machine, ['serialNo', 'countryOfOrigin', 'note']),
+  };
+}
+
+/** equipment_lookup: DCRS's own reply first, then the list's size and gaps, then the machines while they fit. */
+export function equipmentForModel(answer: unknown): unknown {
+  if (!isObj(answer)) return fit(answer, BUDGET.one);
+  const out: Obj = pick(answer, ['query', 'answer', 'exact', 'total']);
+  const register = isObj(answer.list) ? pick(answer.list, ['formatNo', 'name', 'status', 'machines', 'numbered', 'gaps']) : {};
+  if (Object.keys(register).length > 0) out.list = register;
+  const said = notes();
+  addWhileFits(out, 'machines', list(answer.machines).map(machineBrief), BUDGET.one, said);
+  return finish(out, said, BUDGET.one);
+}
+
+/** An insight: how severe, what it says and why, a couple of the records it was read from, and the action DCRS suggests. */
+function insightBrief(insight: unknown): unknown {
+  if (!isObj(insight)) return insight;
+  const metric = isObj(insight.metric) ? `${String(insight.metric.label)}: ${String(insight.metric.value)}` : undefined;
+  const evidence = list(insight.evidence)
+    .slice(0, 2)
+    .map((item) => (isObj(item) ? pick(item, ['recordId', 'dueDate', 'value']) : item));
+  const action = isObj(insight.suggestedCapa) ? insight.suggestedCapa.action : undefined;
+  return {
+    ...pick(insight, ['severity', 'formatNo', 'title', 'detail']),
+    ...(metric ? { metric } : {}),
+    ...(evidence.length > 0 ? { evidence } : {}),
+    ...(typeof action === 'string' && action ? { suggestedAction: action } : {}),
+  };
+}
+
+/** insights: the headline DCRS's Mitra is given with every message, then the insights behind it, most severe first. */
+export function insightsForModel(answer: unknown): unknown {
+  if (!isObj(answer) || !Array.isArray(answer.insights)) return fit(without(answer, WEB_ONLY), BUDGET.list);
+  const out: Obj = pick(answer, ['date', 'headline', 'counts', 'total']);
+  const said = notes();
+  addWhileFits(out, 'insights', answer.insights.map(insightBrief), BUDGET.list, said);
+  return finish(out, said, BUDGET.list);
+}
+
+/** An escalation: who, the counts in a sentence, and a few of the records behind it. */
+function escalationBrief(escalation: unknown): unknown {
+  if (!isObj(escalation)) return escalation;
+  const records = list(escalation.records)
+    .slice(0, 3)
+    .map((item) => (isObj(item) ? pick(item, ['what', 'dueDate', 'outcome', 'daysLate']) : item));
+  return {
+    ...pick(escalation, ['subjectName', 'kind', 'departmentName', 'late', 'neverDone', 'sentence', 'people']),
+    ...(escalation.acknowledged === true ? pick(escalation, ['acknowledgedBy', 'acknowledgedAt']) : {}),
+    ...(records.length > 0 ? { records } : {}),
+  };
+}
+
+/** escalations: the line DCRS's Mitra adds for the super admin, then each escalation while they fit. */
+export function escalationsForModel(answer: unknown): unknown {
+  if (!isObj(answer) || !Array.isArray(answer.escalations)) return fit(without(answer, WEB_ONLY), BUDGET.list);
+  const out: Obj = pick(answer, ['summary', 'waiting', 'total', 'week']);
+  const said = notes();
+  addWhileFits(out, 'escalations', answer.escalations.map(escalationBrief), BUDGET.list, said);
+  return finish(out, said, BUDGET.list);
+}
+
 /** history_figures: the period and the evidence lines, with a few of the records they came from. */
 export function figuresForModel(answer: unknown): unknown {
   if (!isObj(answer) || !Array.isArray(answer.evidence)) return fit(without(answer, WEB_ONLY), BUDGET.list);

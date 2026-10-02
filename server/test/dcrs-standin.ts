@@ -208,6 +208,105 @@ export const CHANGED_FOR_MODEL = {
   problems: [],
 };
 
+/** GET /api/v1/equipment?q=M-47: the equipment list, F/MNT/01, as DCRS's engine answers for a Maintenance account. */
+export const MACHINE_M47 = {
+  machineNo: 'M-47',
+  description: 'UV Flexo Printing Machine',
+  model: 'Delta 330',
+  manufacturer: 'Lombardi',
+  location: 'Lombardi Printing',
+  section: 'Flexo',
+  size: '330 mm',
+  month: 'November',
+  year: '2021',
+  serialNo: '88562',
+  countryOfOrigin: 'Itlay',
+  summary: 'M-47 · UV Flexo Printing Machine · Delta 330 · Lombardi Printing',
+};
+export const EQUIPMENT = {
+  query: 'M-47',
+  list: {
+    documentId: 'mnt-equipment-list',
+    formatNo: 'F/MNT/01',
+    name: 'List of Equipments & Utilities',
+    recordId: 'seed-mnt-equipment-list-2026-09-29',
+    date: '2026-09-29',
+    status: 'Verified',
+    machines: 68,
+    numbered: { first: 'M-01', last: 'M-86', count: 68 },
+    gaps: ['M-05', 'M-22 to M-32', 'M-37 to M-42'],
+    route: '/document/mnt-equipment-list',
+    link: `${BASE}/index.html#/document/mnt-equipment-list`,
+  },
+  answer: 'M-47, as F/MNT/01 (List of Equipments & Utilities) writes it:\n• Machine Description: UV Flexo Printing Machine\n• Machine Name / Model No.: Delta 330',
+  exact: 'M-47',
+  total: 1,
+  machines: [MACHINE_M47],
+};
+
+/** GET /api/v1/insights: what stands out in a QC account's records. */
+export const INSIGHTS = {
+  date: '2026-10-02',
+  headline: 'Insights (1 high, 0 medium, 0 low): [high] Device QC-76 (F/QC/12): calibration expired on 27-Aug-2024, 766 days ago;',
+  counts: { high: 1, medium: 0, low: 0 },
+  total: 1,
+  insights: [
+    {
+      id: 'c3|qc-weight-scale-calibration|QC-76',
+      rule: 'C3',
+      severity: 'high',
+      module: 'Quality Control — Inspection Records',
+      documentId: 'qc-weight-scale-calibration',
+      formatNo: 'F/QC/12',
+      document: 'Weekly Internal Calibration Records - Weight Scale',
+      title: 'Device QC-76 (F/QC/12): calibration expired on 27-Aug-2024, 766 days ago',
+      detail: 'The latest F/QC/12 sheet for QC-76 gives Calibration Expiry 27-Aug-2024. Have it calibrated, or take it out of use.',
+      metric: { label: 'Expired', value: '766 days ago' },
+      evidence: [
+        { recordId: 'qc-scale-2024-03', documentId: 'qc-weight-scale-calibration', dueDate: '2024-03-27', field: 'calibrationExpiry', value: '27-Aug-2024' },
+        { recordId: null, documentId: 'qc-weight-scale-calibration', dueDate: '2024-03-20', field: 'calibrationExpiry', value: '27-Aug-2024' },
+        { recordId: 'qc-scale-2024-02', documentId: 'qc-weight-scale-calibration', dueDate: '2024-02-14', field: 'calibrationExpiry', value: '27-Aug-2024' },
+      ],
+      evidenceTotal: 3,
+      suggestedCapa: { finding: 'QC-76 is out of calibration.', comment: 'F/QC/12 of 27-Mar-2024.', action: 'Calibrate QC-76 and write the new expiry on its next sheet.' },
+      route: '/record/qc-scale-2024-03',
+      link: `${BASE}/index.html#/record/qc-scale-2024-03`,
+    },
+  ],
+};
+
+/** GET /api/v1/escalations: the super admin's, as DCRS's server raised them. */
+export const ESCALATIONS = {
+  open: true,
+  today: '2026-10-02',
+  week: '2026-W40',
+  rule: { late: 3, neverDone: 2, windowDays: 30 },
+  summary: 'Escalated to the super admin, not yet acknowledged: Kapila Barad (3 late).',
+  waiting: 1,
+  total: 1,
+  escalations: [
+    {
+      id: '11',
+      kind: 'person',
+      subjectName: 'Kapila Barad',
+      department: 'QC',
+      departmentName: 'Quality Control',
+      period: '2026-W40',
+      late: 3,
+      neverDone: 0,
+      sentence: '3 late in the 30 days to 02-Oct-2026 — F-QC-30: 3 late',
+      raisedAt: '2026-10-01T04:30:00.000Z',
+      updatedAt: '2026-10-02T04:30:00.000Z',
+      acknowledged: false,
+      acknowledgedBy: null,
+      acknowledgedAt: null,
+      window: { from: '2026-09-03', to: '2026-10-02' },
+      worst: [{ documentId: 'qc-viscosity', what: 'F-QC-30', late: 3, neverDone: 0 }],
+      records: [1, 2, 3, 4].map((n) => ({ id: `rec-late-${n}`, documentId: 'qc-viscosity', what: 'F-QC-30', dueDate: `2026-09-2${n}`, outcome: 'late', daysLate: n })),
+    },
+  ],
+};
+
 export const PHOTO: FileInfo = {
   id: '9d0b5e8e-7c1b-4f7e-9a51-3f7f0c7f1a10',
   filename: 'line-3 clearance.jpg',

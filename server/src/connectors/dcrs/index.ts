@@ -2,6 +2,7 @@ import type { Connector } from '../types.ts';
 import { dcrsClient, tokenOf, type DcrsOptions } from './client.ts';
 import { documentActions } from './documents.ts';
 import { findingActions } from './findings.ts';
+import { plantActions } from './plant.ts';
 import { recordActions } from './records.ts';
 
 /**
@@ -23,7 +24,7 @@ export function createDcrsConnector(options: DcrsOptions): Connector {
     description:
       "The plant's controlled documents (formats such as F/QC/05 or F/HR/17), the records filled in on them, CAPA findings, customer complaints and the daily pest control report, with the person's own DCRS account and departments. Dates are the factory's days, YYYY-MM-DD. To fill in a record: find_documents, open_record, get_record for its field keys, edit_record, then record_action submit.",
     examples: ['What is due today?', "Start today's pest control record", 'Show the open CAPA findings', "Print yesterday's pest control report"],
-    actions: [...documentActions(dcrs), ...recordActions(dcrs), ...findingActions(dcrs)],
+    actions: [...documentActions(dcrs), ...plantActions(dcrs), ...recordActions(dcrs), ...findingActions(dcrs)],
     authenticate: (username, password) => dcrs.signIn(username.trim(), password),
     signOut: async (credentials) => dcrs.signOut(tokenOf(credentials)),
   };

@@ -4,7 +4,7 @@ import { CLIENT_NAME, filenameOf, sessionCookie } from '../src/connectors/dcrs/c
 import { fit, SHORTENED, WEB_ONLY_IN_LISTS, without } from '../src/connectors/dcrs/fit.ts';
 import { createDcrsConnector } from '../src/connectors/dcrs/index.ts';
 import { patchInWords } from '../src/connectors/dcrs/inputs.ts';
-import { recordForModel, todayForModel } from '../src/connectors/dcrs/shape.ts';
+import { equipmentForModel, escalationsForModel, insightsForModel, recordForModel, todayForModel } from '../src/connectors/dcrs/shape.ts';
 import { createRegistry } from '../src/connectors/registry.ts';
 import { ConnectorError, splitResult } from '../src/connectors/types.ts';
 import {
@@ -14,6 +14,9 @@ import {
   CHANGED_FOR_MODEL,
   ctx,
   DOC_BRIEF,
+  EQUIPMENT,
+  ESCALATIONS,
+  INSIGHTS,
   json,
   LIST_ITEM,
   ME,
@@ -46,8 +49,11 @@ const READS = [
   'list_complaints',
   'get_pest_control_report',
   'get_pest_control_report_summary',
+  'equipment_lookup',
+  'insights',
+  'escalations',
 ];
-const WRITES = ['open_record', 'edit_record', 'record_action', 'add_photo_to_record', 'fill_record_with_sample_data', 'close_finding'];
+const WRITES =['open_record', 'edit_record', 'record_action', 'add_photo_to_record', 'fill_record_with_sample_data', 'close_finding'];
 
 function expectSentAsThePerson(request: { headers: Record<string, string> }) {
   expect(request.headers['x-client-name']).toBe('Mitra mobile app');
@@ -64,7 +70,7 @@ group('the connector', () => {
     for (const name of WRITES) expect(actionOf(connector.actions, name).kind, name).toBe('write');
     // Registered as the server registers it: every input a z.object(), every tool name valid.
     const registry = createRegistry([connector], 'dcrs');
-    expect(registry.bindings).toHaveLength(20);
+    expect(registry.bindings).toHaveLength(23);
     expect(connector.examples?.length).toBeGreaterThanOrEqual(2);
   });
 
@@ -343,6 +349,141 @@ const CASES: Case[] = [
     answer: { date: '2026-09-28', recordId: 'rec-p', rodentsCaught: 0 },
   },
   {
+    action: 'equipment_lookup',
+    input: { q: 'M-47' },
+    route: 'GET /api/v1/equipment',
+    query: { q: 'M-47', limit: '8' },
+    answer: EQUIPMENT,
+    model: {
+      query: 'M-47',
+      answer: EQUIPMENT.answer,
+      exact: 'M-47',
+      total: 1,
+      list: { formatNo: 'F/MNT/01', name: 'List of Equipments & Utilities', status: 'Verified', machines: 68, numbered: { first: 'M-01', last: 'M-86', count: 68 }, gaps: ['M-05', 'M-22 to M-32', 'M-37 to M-42'] },
+      machines: [
+        {
+          machineNo: 'M-47',
+          description: 'UV Flexo Printing Machine',
+          model: 'Delta 330',
+          manufacturer: 'Lombardi',
+          location: 'Lombardi Printing',
+          section: 'Flexo',
+          size: '330 mm',
+          made: 'November 2021',
+          serialNo: '88562',
+          countryOfOrigin: 'Itlay',
+        },
+      ],
+    },
+  },
+  {
+    action: 'equipment_lookup',
+    input: {},
+    route: 'GET /api/v1/equipment',
+    query: { limit: '8' },
+    answer: { ...EQUIPMENT, query: '', answer: null, exact: null, total: 68, machines: [{ ...EQUIPMENT.machines[0], serialNo: null, note: 'F/MNT/01 prints this line one column out of step.' }] },
+    model: {
+      total: 68,
+      list: { formatNo: 'F/MNT/01', name: 'List of Equipments & Utilities', status: 'Verified', machines: 68, numbered: { first: 'M-01', last: 'M-86', count: 68 }, gaps: ['M-05', 'M-22 to M-32', 'M-37 to M-42'] },
+      machines: [
+        {
+          machineNo: 'M-47',
+          description: 'UV Flexo Printing Machine',
+          model: 'Delta 330',
+          manufacturer: 'Lombardi',
+          location: 'Lombardi Printing',
+          section: 'Flexo',
+          size: '330 mm',
+          made: 'November 2021',
+          countryOfOrigin: 'Itlay',
+          note: 'F/MNT/01 prints this line one column out of step.',
+        },
+      ],
+    },
+  },
+  {
+    action: 'insights',
+    input: {},
+    route: 'GET /api/v1/insights',
+    query: { limit: '5' },
+    answer: INSIGHTS,
+    model: {
+      date: '2026-10-02',
+      headline: INSIGHTS.headline,
+      counts: { high: 1, medium: 0, low: 0 },
+      total: 1,
+      insights: [
+        {
+          severity: 'high',
+          formatNo: 'F/QC/12',
+          title: INSIGHTS.insights[0]!.title,
+          detail: INSIGHTS.insights[0]!.detail,
+          metric: 'Expired: 766 days ago',
+          evidence: [
+            { recordId: 'qc-scale-2024-03', dueDate: '2024-03-27', value: '27-Aug-2024' },
+            { dueDate: '2024-03-20', value: '27-Aug-2024' },
+          ],
+          suggestedAction: 'Calibrate QC-76 and write the new expiry on its next sheet.',
+        },
+      ],
+    },
+  },
+  {
+    action: 'escalations',
+    input: {},
+    route: 'GET /api/v1/escalations',
+    query: { open: '1' },
+    answer: ESCALATIONS,
+    model: {
+      summary: ESCALATIONS.summary,
+      waiting: 1,
+      total: 1,
+      week: '2026-W40',
+      escalations: [
+        {
+          subjectName: 'Kapila Barad',
+          kind: 'person',
+          departmentName: 'Quality Control',
+          late: 3,
+          neverDone: 0,
+          sentence: '3 late in the 30 days to 02-Oct-2026 — F-QC-30: 3 late',
+          records: [1, 2, 3].map((n) => ({ what: 'F-QC-30', dueDate: `2026-09-2${n}`, outcome: 'late', daysLate: n })),
+        },
+      ],
+    },
+  },
+  {
+    action: 'escalations',
+    input: { status: 'all' },
+    route: 'GET /api/v1/escalations',
+    query: { open: '0' },
+    answer: {
+      ...ESCALATIONS,
+      open: false,
+      summary: 'Nothing is escalated to the super admin and waiting to be acknowledged.',
+      waiting: 0,
+      escalations: [{ ...ESCALATIONS.escalations[0], acknowledged: true, acknowledgedBy: 'Super Admin', acknowledgedAt: '2026-10-02T05:00:00.000Z', records: [] }],
+    },
+    model: {
+      summary: 'Nothing is escalated to the super admin and waiting to be acknowledged.',
+      waiting: 0,
+      total: 1,
+      week: '2026-W40',
+      escalations: [
+        {
+          subjectName: 'Kapila Barad',
+          kind: 'person',
+          departmentName: 'Quality Control',
+          late: 3,
+          neverDone: 0,
+          sentence: '3 late in the 30 days to 02-Oct-2026 — F-QC-30: 3 late',
+          acknowledgedBy: 'Super Admin',
+          acknowledgedAt: '2026-10-02T05:00:00.000Z',
+        },
+      ],
+    },
+  },
+  {
     action: 'open_record',
     input: { documentId: 'F/QC/15-A' },
     route: 'POST /api/v1/records',
@@ -496,6 +637,23 @@ group('the actions', () => {
     expect(parse('close_finding', { id: 'CAPA-1', note: 'x'.repeat(1001) })).toBe(false);
     expect(parse('find_documents', { limit: 51 })).toBe(false);
     expect(parse('edit_record', { recordId: 'r', patch: 'temperature=4' })).toBe(false);
+    expect(parse('equipment_lookup', { q: '  ' })).toBe(false);
+    expect(parse('equipment_lookup', {})).toBe(true);
+    expect(parse('escalations', { status: 'closed' })).toBe(false);
+    expect(parse('escalations', { status: 'all' })).toBe(true);
+  });
+
+  it('names the newer lookups in plain words, for the activity shown in the chat', async () => {
+    const { connector } = standInDcrs();
+    const words = (name: string, input: Record<string, unknown>) => {
+      const action = actionOf(connector.actions, name);
+      return action.describe(action.input.parse(input), ctx);
+    };
+    expect(await words('equipment_lookup', { q: 'M-47' })).toBe('Look up "M-47" on the equipment list (F/MNT/01)');
+    expect(await words('equipment_lookup', {})).toBe('Read the equipment list (F/MNT/01)');
+    expect(await words('insights', {})).toBe('Read what stands out in the records');
+    expect(await words('escalations', {})).toBe('Read the escalations waiting for the super admin');
+    expect(await words('escalations', { status: 'all' })).toBe('Read the escalations of the last 30 days');
   });
 });
 
@@ -578,6 +736,20 @@ group("DCRS's refusals", () => {
     await refusedWith(() => refusal(403, 'password-change-required', 'Choose a password of your own first.'), 'forbidden', 'Choose a password of your own first.');
   });
 
+  it("the escalations are the super admin's and the equipment list is Maintenance's, in DCRS's own words", async () => {
+    const adminOnly = "Escalations are the super admin's alone: they name people, so no other account is shown them.";
+    const maintenance = 'F/MNT/01 List of Equipments & Utilities is kept by Maintenance, and this account is not kept to it. Ask the super admin for access.';
+    const { connector } = standInDcrs({
+      'GET /api/v1/escalations': () => refusal(403, 'super-admin-only', adminOnly),
+      'GET /api/v1/equipment': () => refusal(403, 'not-your-department', maintenance),
+    });
+    await expect(actionOf(connector.actions, 'escalations').run(ctx, {})).rejects.toMatchObject({ kind: 'forbidden', message: adminOnly });
+    await expect(actionOf(connector.actions, 'equipment_lookup').run(ctx, { q: 'M-47' })).rejects.toMatchObject({ kind: 'forbidden', message: maintenance });
+    // A DCRS from before these routes says it has no such route: the person hears DCRS needs updating.
+    const { connector: older } = standInDcrs();
+    await expect(actionOf(older.actions, 'insights').run(ctx, {})).rejects.toMatchObject({ kind: 'unavailable', message: expect.stringMatching(/needs updating/) });
+  });
+
   it("404 is something DCRS doesn't have; a route it doesn't have means DCRS needs updating", async () => {
     await refusedWith(() => refusal(404, 'not-found', 'There is no record "rec-1".'), 'not_found', 'There is no record "rec-1".');
     await refusedWith(() => refusal(404, 'no-such-route', 'There is no such route in the DCRS API.'), 'unavailable', /needs updating/);
@@ -657,6 +829,30 @@ group('keeping answers small for the model', () => {
     expect(shaped.date).toBe('2026-09-30');
     expect(JSON.stringify(shaped.overdue)).toContain('rec-0');
     expect(shaped.leftOut).toMatch(/Not shown/);
+  });
+
+  it("keeps DCRS's own reply about a machine, and as many machines as fit", () => {
+    const machines = Array.from({ length: 60 }, (_, i) => ({ ...EQUIPMENT.machines[0], machineNo: `M-${i}`, description: 'A machine with a long description, '.repeat(4) }));
+    const shaped = equipmentForModel({ ...EQUIPMENT, exact: null, total: 60, machines }) as Record<string, unknown>;
+    expect(JSON.stringify(shaped).length).toBeLessThanOrEqual(4_500);
+    expect(shaped.answer).toBe(EQUIPMENT.answer);
+    expect(JSON.stringify(shaped.machines)).toContain('M-0');
+    expect(shaped.cutShort).toMatch(/machines/);
+    expect(JSON.stringify(shaped)).not.toContain('/document/');
+    expect(equipmentForModel('odd')).toBe('odd');
+  });
+
+  it('keeps the insights headline ahead of the insights, and the escalations line ahead of the escalations', () => {
+    const insights = Array.from({ length: 20 }, (_, i) => ({ ...INSIGHTS.insights[0], title: `Insight ${i}`, detail: 'x'.repeat(400) }));
+    const shaped = insightsForModel({ ...INSIGHTS, total: 20, insights }) as Record<string, unknown>;
+    expect(JSON.stringify(shaped).length).toBeLessThanOrEqual(3_000);
+    expect(shaped.headline).toBe(INSIGHTS.headline);
+    expect(JSON.stringify(shaped.insights)).toContain('Insight 0');
+    const escalations = Array.from({ length: 30 }, (_, i) => ({ ...ESCALATIONS.escalations[0], subjectName: `Person ${i}` }));
+    const brief = escalationsForModel({ ...ESCALATIONS, waiting: 30, total: 30, escalations }) as Record<string, unknown>;
+    expect(JSON.stringify(brief).length).toBeLessThanOrEqual(3_000);
+    expect(brief.summary).toBe(ESCALATIONS.summary);
+    expect(JSON.stringify(brief.escalations)).toContain('Person 0');
   });
 
   it("drops the web app's routes, and its links from lists", () => {
