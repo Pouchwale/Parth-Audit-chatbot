@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Crypto from 'expo-crypto';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
@@ -23,6 +23,14 @@ export async function deviceInfo(): Promise<DeviceInfo> {
     osVersion: Device.osVersion,
     appVersion: Constants.expoConfig?.version ?? null,
   };
+}
+
+/**
+ * The name to look for in the phone's Settings to allow the microphone or the camera. Inside Expo Go the permission
+ * is Expo Go's, asked in Expo Go's own words, so the person allows it for Expo Go, not for Mitra.
+ */
+export function nameInSettings(): string {
+  return Constants.executionEnvironment === ExecutionEnvironment.StoreClient ? 'Expo Go' : 'this app';
 }
 
 export function timeZone(): string | undefined {

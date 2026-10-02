@@ -10,6 +10,7 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { api, ApiError, errorMessage } from './api';
 import { useAuth } from './auth';
+import { nameInSettings } from './device';
 import { tapFeedback } from './haptics';
 import { discardRecording, readRecording, recordingFile } from './recording';
 import { stopSpeaking } from './speech';
@@ -216,7 +217,7 @@ async function microphoneRefusal(): Promise<string | null> {
   if (granted) return null;
   return Platform.OS === 'web'
     ? 'Allow this site to use your microphone in your browser, then try again.'
-    : 'Allow microphone access for this app in Settings, then try again.';
+    : `Allow microphone access for ${nameInSettings()} in your phone's Settings, then try again.`;
 }
 
 /** Stops the take and hands the audio back to playback. */

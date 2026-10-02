@@ -2,6 +2,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { Directory, File, FileMode, Paths } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import type { FileData } from './api';
+import { nameInSettings } from './device';
 import { IMAGE_SIGNATURE_BYTES, imageTypeOf, isHidden, readableName, withType } from './file-types';
 import { sortPicked, type Candidate, type PickedFile, type PickResult, type PickSource } from './picked-files';
 
@@ -36,7 +37,7 @@ export async function pickFiles(source: PickSource, room: number, onReading: () 
     case 'camera':
       // iPhones refuse to open the camera until the app has asked for it.
       if (!(await ImagePicker.requestCameraPermissionsAsync()).granted) {
-        throw new PickError('Allow camera access for this app in Settings, then try again.');
+        throw new PickError(`Allow camera access for ${nameInSettings()} in your phone's Settings, then try again.`);
       }
       return sortPhotos(await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: PHOTO_QUALITY }), room);
     case 'files': {

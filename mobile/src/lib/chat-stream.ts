@@ -2,7 +2,7 @@
 import { fetch } from 'expo/fetch';
 import { Platform } from 'react-native';
 import type { AssistantReply, DecisionRequest, FileInfo, MessageRequest, RetryRequest, StreamEvent } from '@shared/api';
-import { ApiError, conversationPath, requestFailed, SERVER_URL, unreachable } from './api';
+import { ApiError, conversationPath, requestFailed, serverBase, unreachable } from './api';
 import { timeZone } from './device';
 import { readSse } from './sse';
 
@@ -46,7 +46,7 @@ export async function streamChat(
   try {
     let response: Awaited<ReturnType<typeof fetch>>;
     try {
-      response = await fetch(`${SERVER_URL}${path}`, {
+      response = await fetch(`${serverBase()}${path}`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${token}`,

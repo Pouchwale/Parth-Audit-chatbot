@@ -26,26 +26,28 @@ import type {
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { timeZone } from './device';
-
-const DEV_SERVER_PORT = 3000;
+import { serverAddress, unreachableMessage } from './server-address';
 
 /**
- * EXPO_PUBLIC_API_URL when set (production builds). In development the server runs on the same
- * computer as Expo, so use that computer's address: the page's host on web, and the address the
- * phone loaded the app from on Expo Go or a development build.
+ * Where the Mitra server is (lib/server-address.ts): EXPO_PUBLIC_API_URL when it was set where the app was bundled;
+ * in a browser, the page's own computer; in Expo Go, the computer it loaded the app from, which runs the server too.
  */
-function serverUrl(): string {
-  const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
-  if (configured) return configured.replace(/\/+$/, '');
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return `${window.location.protocol}//${window.location.hostname}:${DEV_SERVER_PORT}`;
-  }
-  const host = Constants.expoConfig?.hostUri?.split(':')[0];
-  return `http://${host || 'localhost'}:${DEV_SERVER_PORT}`;
+function findServer(): string | null {
+  return serverAddress({
+    configured: process.env.EXPO_PUBLIC_API_URL,
+    page: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location : null,
+    expoAddresses: [Constants.expoConfig?.hostUri, Constants.expoGoConfig?.debuggerHost, Constants.linkingUri],
+  });
 }
 
-export const SERVER_URL = serverUrl();
-const BASE_URL = SERVER_URL;
+/** The Mitra server's address, or null when this copy of the app can't tell where it is. */
+export const SERVER_URL: string | null = findServer();
+
+/** The server's address for a request; when the app can't tell where it is, the error that says what to do. */
+export function serverBase(): string {
+  if (!SERVER_URL) throw unreachable();
+  return SERVER_URL;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -59,13 +61,9 @@ export class ApiError extends Error {
   }
 }
 
-/** The error for a request that never reached the server. */
+/** The error for a request that never reached the server: what to try, in plain words, with the address it tried. */
 export function unreachable(): ApiError {
-  return new ApiError(
-    0,
-    'network',
-    `Can't reach the assistant server at ${BASE_URL}. Make sure it's running and this device is on the same network, then try again.`,
-  );
+  return new ApiError(0, 'network', unreachableMessage(SERVER_URL, Platform.OS === 'web' ? 'computer' : 'phone'));
 }
 
 /** The error the server answered with, taken from its JSON body when it has one. */
@@ -101,9 +99,10 @@ async function send(path: string, { method = 'GET', token, body, upload, headers
     payload = JSON.stringify(body);
   }
 
+  const url = `${serverBase()}${path}`;
   let response: Response;
   try {
-    response = await fetch(`${BASE_URL}${path}`, { method, headers, body: payload, signal });
+    response = await fetch(url, { method, headers, body: payload, signal });
   } catch {
     throw unreachable();
   }
@@ -138,7 +137,7 @@ function filePath(fileId: string, purpose: FilePurpose): string {
 
 /** Where a file's content is, for loading it with the session token in a header. */
 export function fileUrl(fileId: string, purpose: FilePurpose): string {
-  return `${BASE_URL}${filePath(fileId, purpose)}`;
+  return `${serverBase()}${filePath(fileId, purpose)}`;
 }
 
 /** Which downloads to list. All of them must match; leave one out to not filter by it. */

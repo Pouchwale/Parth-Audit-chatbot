@@ -79,7 +79,7 @@ export default function SettingsScreen() {
       <SectionTitle>About</SectionTitle>
       <Card>
         <InfoRow label="App version" value={Constants.expoConfig?.version ?? 'Unknown'} />
-        <InfoRow label="Server" value={SERVER_URL} />
+        <InfoRow label="Server" value={SERVER_URL ?? 'Not known'} />
       </Card>
 
       <SignOut />
