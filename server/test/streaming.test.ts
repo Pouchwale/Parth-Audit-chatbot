@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import Groq from 'groq-sdk';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { AssistantMessage, AssistantReply, ConversationDetail, StreamEvent } from '@shared/api.ts';
+import { ModelBusy } from '../src/agent/model.ts';
 import { actions, conversations } from '../src/db/schema.ts';
 import { callsTool, cutOff, fails, findEvent, parseEvents, says, setup, streams } from './helpers.ts';
 
@@ -165,6 +166,44 @@ it('reports a failure after the stream started as an error event, and saves the 
     { role: 'assistant', status: 'error', error: message, parts: [] },
   ]);
   expect(conv!.messages).toEqual([{ role: 'user', content: 'What is open?' }]);
+});
+
+it('says so while the model is busy, with how long the wait is, and clears it when the model goes on', async () => {
+  const alice = await t.signIn('alice');
+  t.model.queue((request, options) => {
+    options.onWait?.(7_910);
+    options.onWait?.(null);
+    return streams('Hello ', 'Alice.')(request, options);
+  });
+
+  const events = parseEvents((await stream(alice, '/assistant/messages', { text: 'Hello' })).payload);
+  expect(events.map((e) => e.type).filter((type) => type !== 'title')).toEqual(['start', 'status', 'status', 'delta', 'delta', 'done']);
+  expect(events.filter((e) => e.type === 'status')).toEqual([
+    { type: 'status', status: 'waiting_for_model', retryInMs: 7_910 },
+    { type: 'status', status: null },
+  ]);
+  // The wait changes nothing in the reply itself.
+  expect(findEvent(events, 'done').reply.reply).toBe('Hello Alice.');
+  expect(replay(events).parts).toEqual([{ type: 'text', text: 'Hello Alice.' }]);
+});
+
+it('ends a wait too long for a person as assistant_busy, saying when to try again, and Retry continues the reply', async () => {
+  const alice = await t.signIn('alice');
+  t.model.queue(fails(new ModelBusy(179_560)));
+
+  const events = parseEvents((await stream(alice, '/assistant/messages', { text: 'What is open?' })).payload);
+  expect(events.map((e) => e.type).filter((type) => type !== 'title')).toEqual(['start', 'error']);
+  const message = 'The assistant is busy right now. Try again in about 3 minutes.';
+  expect(findEvent(events, 'error')).toEqual({ type: 'error', error: 'assistant_busy', message });
+  const start = findEvent(events, 'start');
+  const [conv] = await t.db.select().from(conversations);
+  expect(conv!.lockedUntil).toBeNull();
+  expect(conv!.transcript[1]).toMatchObject({ id: start.message.id, status: 'error', error: message });
+
+  t.model.queue(says('Two items are open.'));
+  const retried = await t.as(alice).post(`/assistant/conversations/${start.conversationId}/retry`, {});
+  expect(retried.statusCode).toBe(200);
+  expect(retried.json<AssistantReply>()).toMatchObject({ reply: 'Two items are open.', message: { id: start.message.id, status: 'complete' } });
 });
 
 it('streams a decision into the message that proposed the change', async () => {
