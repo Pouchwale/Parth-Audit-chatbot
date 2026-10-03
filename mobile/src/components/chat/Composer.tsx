@@ -7,6 +7,7 @@ import type { Attachments } from '@/lib/attachments';
 import { MAX_MESSAGE_LENGTH } from '@/lib/chat-stream';
 import type { VoiceInput } from '@/lib/voice';
 import { AttachMenu, type Anchor } from './AttachMenu';
+import { AUTO_SIZE_STYLE, REPORTS_CONTENT_SIZE } from './auto-size';
 import { AttachmentChips } from './AttachmentChips';
 import { ComposerButton } from './ComposerButton';
 import { RecordingBar } from './RecordingBar';
@@ -110,16 +111,17 @@ export function Composer({
               onSend();
             }
           }}
-          // Phones grow the box by themselves. Browsers report only growth, so it shrinks back once sent.
+          // Phones, and browsers with field-sizing, grow the box by themselves. Other browsers report only growth, so
+          // the box is set to it, and shrinks back once sent.
           onContentSizeChange={
-            Platform.OS === 'web'
+            REPORTS_CONTENT_SIZE
               ? ({ nativeEvent }) => setWebHeight(Math.min(MAX_INPUT_HEIGHT, Math.max(MIN_INPUT_HEIGHT, nativeEvent.contentSize.height)))
               : undefined
           }
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           keyboardAppearance={scheme}
-          style={[styles.input, { color: theme.text }, Platform.OS === 'web' ? { height: value ? webHeight : MIN_INPUT_HEIGHT } : null]}
+          style={[styles.input, { color: theme.text }, AUTO_SIZE_STYLE, REPORTS_CONTENT_SIZE ? { height: value ? webHeight : MIN_INPUT_HEIGHT } : null]}
         />
         {busy ? (
           <ComposerButton icon="stop" label={stopping ? 'Stopping the reply' : 'Stop the reply'} onPress={onStop} primary busy={stopping} />

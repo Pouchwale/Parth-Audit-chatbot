@@ -78,11 +78,11 @@ export function useDownloads(query: () => ExportFilters): Downloads {
     try {
       const page = await call((token) => api.exports(token, filters, before));
       update((loaded) => ({ ...loaded, exports: [...(loaded.exports ?? []), ...page.exports], nextBefore: page.nextBefore, loadingMore: false }));
-    } catch (error) {
-      update((loaded) => ({ ...loaded, loadingMore: false, moreError: errorMessage(error) }));
-    } finally {
-      if (loadingMoreFor.current === attempt) loadingMoreFor.current = null;
+    } catch (failure) {
+      const moreError = errorMessage(failure);
+      update((loaded) => ({ ...loaded, loadingMore: false, moreError }));
     }
+    if (loadingMoreFor.current === attempt) loadingMoreFor.current = null;
   }
 
   return {

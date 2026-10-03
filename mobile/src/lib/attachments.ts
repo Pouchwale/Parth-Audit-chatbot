@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import type { FileInfo } from '@shared/api';
 import { api, ApiError, errorMessage } from './api';
 import { useAuth } from './auth';
+import type { Call } from './call';
 import { MAX_ATTACHMENTS, MAX_FILE_BYTES } from './file-types';
 import { count } from './format';
 import { discardPicked, PickError, pickFiles, readPicked } from './pick';
@@ -59,17 +60,16 @@ const PICK_FAILED: Record<PickSource, string> = {
 
 let keys = 0;
 
-type Call = <T>(request: (token: string) => Promise<T>) => Promise<T>;
-
 /** The attachments of one message being written, and their uploads. */
 class AttachmentUploads {
   private state: AttachmentsState = { items: [], notice: null, reading: false };
   private readonly listeners = new Set<() => void>();
   private readonly uploads = new Map<string, AbortController>();
-  private readonly call: Call;
+  /** The newest sign-in's way of calling the API: the uploads outlive renders, so the hook keeps this current. */
+  private readonly latest: RefObject<Call>;
 
-  constructor(call: Call) {
-    this.call = call;
+  constructor(latest: RefObject<Call>) {
+    this.latest = latest;
   }
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -138,7 +138,7 @@ class AttachmentUploads {
     this.edit(key, { status: 'uploading' });
     try {
       const data = await readPicked(picked);
-      const file = await this.call((token) =>
+      const file = await this.latest.current((token) =>
         api.uploadFile(token, { data, contentType: picked.mimeType, name: picked.name, path: picked.path }, controller.signal),
       );
       if (!controller.signal.aborted) this.edit(key, { status: 'uploaded', file });
@@ -189,12 +189,11 @@ function leftOut({ overLimit, unsupported, tooLarge, empty }: PickResult): strin
 /** The files attached to the message being written on this screen. */
 export function useAttachments(): Attachments {
   const { call } = useAuth();
-  // The uploads outlive renders, so they reach the newest sign-in through this.
   const latest = useRef(call);
   useEffect(() => {
     latest.current = call;
   }, [call]);
-  const [uploads] = useState(() => new AttachmentUploads((request) => latest.current(request)));
+  const [uploads] = useState(() => new AttachmentUploads(latest));
   useEffect(() => () => uploads.clear(), [uploads]);
   const state = useSyncExternalStore(uploads.subscribe, uploads.getState);
 

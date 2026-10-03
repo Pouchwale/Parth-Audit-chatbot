@@ -10,6 +10,7 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { api, ApiError, errorMessage } from './api';
 import { useAuth } from './auth';
+import type { Call } from './call';
 import { nameInSettings } from './device';
 import { tapFeedback } from './haptics';
 import { discardRecording, readRecording, recordingFile } from './recording';
@@ -70,6 +71,9 @@ interface Take {
   lastSpeechAt: number;
 }
 
+/** What came of a take once it was stopped and sent to be turned into text. */
+type TakeOutcome = { kind: 'nothing' } | { kind: 'text'; text: string } | { kind: 'signedOut' } | { kind: 'failed'; error: string };
+
 /**
  * Records the person speaking and turns it into text on the server. The take ends when they tap Done, after
  * a short silence once they have said something, or at the time limit. `onText` receives the text.
@@ -99,25 +103,6 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
     },
     [recorder],
   );
-
-  const onTick = useEffectEvent(() => {
-    const current = take.current;
-    if (!current) return;
-    const { durationMillis, metering = SILENT_DB } = recorder.getStatus();
-    const now = Date.now();
-    if (metering > SPEECH_DB) {
-      current.heardSpeech = true;
-      current.lastSpeechAt = now;
-    }
-    setMeter((previous) => ({ elapsedMs: durationMillis, levels: [...previous.levels, loudness(metering)].slice(-LEVEL_COUNT) }));
-    if (durationMillis >= MAX_MS || (current.heardSpeech && now - current.lastSpeechAt >= SILENCE_MS)) void finish();
-  });
-
-  useEffect(() => {
-    if (phase !== 'recording') return;
-    const timer = setInterval(() => onTick(), POLL_MS);
-    return () => clearInterval(timer);
-  }, [phase]);
 
   function stopWith(message: string | null) {
     setProblem(message);
@@ -161,26 +146,41 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
     const attempt = tries.current;
     tapFeedback();
     setPhase('transcribing');
-    const recording = await stopRecording(recorder).catch(() => null);
-    const file = recording?.uri ?? current.file;
-    try {
-      if (!recording || recording.durationMs < MIN_MS) {
-        if (attempt === tries.current) stopWith(NOTHING_HEARD);
+    const outcome = await transcribeTake(recorder, current, call);
+    // Cancelled, or the screen closed, meanwhile: the take has been thrown away.
+    if (attempt !== tries.current) return;
+    switch (outcome.kind) {
+      case 'nothing':
+        return stopWith(NOTHING_HEARD);
+      case 'signedOut':
+        return; // The sign-in screen says why.
+      case 'failed':
+        return stopWith(outcome.error);
+      case 'text':
+        stopWith(null);
+        deliver.current(outcome.text);
         return;
-      }
-      const { data, contentType } = await readRecording(recording.uri);
-      const { text } = await call((token) => api.transcribe(token, data, contentType));
-      if (attempt !== tries.current) return;
-      stopWith(null);
-      deliver.current(text);
-    } catch (error) {
-      if (attempt !== tries.current) return;
-      if (error instanceof ApiError && error.status === 401) return; // Signed out: the sign-in screen says why.
-      stopWith(errorMessage(error));
-    } finally {
-      if (file) discardRecording(file);
     }
   }
+
+  const onTick = useEffectEvent(() => {
+    const current = take.current;
+    if (!current) return;
+    const { durationMillis, metering = SILENT_DB } = recorder.getStatus();
+    const now = Date.now();
+    if (metering > SPEECH_DB) {
+      current.heardSpeech = true;
+      current.lastSpeechAt = now;
+    }
+    setMeter((previous) => ({ elapsedMs: durationMillis, levels: [...previous.levels, loudness(metering)].slice(-LEVEL_COUNT) }));
+    if (durationMillis >= MAX_MS || (current.heardSpeech && now - current.lastSpeechAt >= SILENCE_MS)) void finish();
+  });
+
+  useEffect(() => {
+    if (phase !== 'recording') return;
+    const timer = setInterval(() => onTick(), POLL_MS);
+    return () => clearInterval(timer);
+  }, [phase]);
 
   async function cancel() {
     if (phase === 'idle') return;
@@ -218,6 +218,23 @@ async function microphoneRefusal(): Promise<string | null> {
   return Platform.OS === 'web'
     ? 'Allow this site to use your microphone in your browser, then try again.'
     : `Allow microphone access for ${nameInSettings()} in your phone's Settings, then try again.`;
+}
+
+/** Stops the take, sends the recording to be turned into text, and removes the file whatever happened. */
+async function transcribeTake(recorder: AudioRecorder, take: Take, call: Call): Promise<TakeOutcome> {
+  const recording = await stopRecording(recorder).catch(() => null);
+  const file = recording?.uri ?? take.file;
+  try {
+    if (!recording || recording.durationMs < MIN_MS) return { kind: 'nothing' };
+    const { data, contentType } = await readRecording(recording.uri);
+    const { text } = await call((token) => api.transcribe(token, data, contentType));
+    return { kind: 'text', text };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) return { kind: 'signedOut' };
+    return { kind: 'failed', error: errorMessage(error) };
+  } finally {
+    if (file) discardRecording(file);
+  }
 }
 
 /** Stops the take and hands the audio back to playback. */

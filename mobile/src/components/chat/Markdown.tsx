@@ -1,9 +1,10 @@
 import { useMemo, type ReactNode } from 'react';
 // Not expo-linking: on web it would open links in place of the app, where this opens a new tab.
-import { Linking, Text, View, type TextStyle } from 'react-native';
+import { Linking, ScrollView, StyleSheet, Text, View, type TextStyle, type ViewStyle } from 'react-native';
 import { Renderer, useMarkdown, type MarkedStyles, type RendererInterface } from 'react-native-marked';
 import { Spacing, useTheme, type Theme } from '@/constants/theme';
 import { CodeBlock, MONOSPACE } from './CodeBlock';
+import { splitBlocks } from './markdown-blocks';
 
 // Replies are written by a model, so only these kinds of links open.
 const SAFE_LINK = /^(https?:|mailto:|tel:)/i;
@@ -33,6 +34,15 @@ class ChatRenderer extends Renderer implements RendererInterface {
 
   override code(text: string, language?: string): ReactNode {
     return <CodeBlock key={this.getKey()} code={text} language={language} />;
+  }
+
+  // A wide table scrolls sideways instead of running off a phone's screen.
+  override table(header: ReactNode[][], rows: ReactNode[][][], tableStyle?: ViewStyle, rowStyle?: ViewStyle, cellStyle?: ViewStyle): ReactNode {
+    return (
+      <ScrollView key={this.getKey()} horizontal showsHorizontalScrollIndicator={false} style={styles.tableScroll}>
+        {super.table(header, rows, tableStyle, rowStyle, cellStyle)}
+      </ScrollView>
+    );
   }
 
   // Remote images aren't loaded: the description stands in for them, as a link.
@@ -84,8 +94,26 @@ function markdownStyles(theme: Theme): MarkedStyles {
   };
 }
 
-/** Markdown from the assistant, themed and selectable. While `streaming`, a caret marks where text is arriving. */
+/**
+ * Markdown from the assistant, themed and selectable. While `streaming`, a caret marks where text is arriving.
+ *
+ * The text is drawn block by block (paragraphs, lists, tables, code blocks: see splitBlocks), each block parsed on
+ * its own and kept while its words stay the same. So a reply streaming in parses and draws only the block being
+ * written, not everything before it, and a finished reply is not parsed again when something else on the screen changes.
+ */
 export function Markdown({ value, streaming }: { value: string; streaming: boolean }) {
+  const blocks = splitBlocks(value);
+  const last = blocks.length - 1;
+  return (
+    <View style={styles.blocks}>
+      {blocks.map((block, index) => (
+        <MarkdownBlock key={index} value={block} streaming={streaming && index === last} />
+      ))}
+    </View>
+  );
+}
+
+function MarkdownBlock({ value, streaming }: { value: string; streaming: boolean }) {
   const theme = useTheme();
   const source = streaming ? `${value.trimEnd()} ${CARET}` : value;
   const styles = useMemo(() => markdownStyles(theme), [theme]);
@@ -94,3 +122,8 @@ export function Markdown({ value, streaming }: { value: string; streaming: boole
   const elements = useMarkdown(source, { styles, theme: colors, renderer });
   return <View>{elements}</View>;
 }
+
+const styles = StyleSheet.create({
+  blocks: {},
+  tableScroll: { marginVertical: Spacing.xs },
+});

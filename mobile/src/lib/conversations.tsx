@@ -45,13 +45,14 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     try {
       const conversations = await call((token) => api.conversations(token));
       if (request === generation.current) setLoaded({ userId, conversations, error: null });
-    } catch (error) {
+    } catch (failure) {
       if (request !== generation.current) return;
-      if (error instanceof ApiError && error.status === 401) return; // Signed out: the sign-in screen says why.
+      if (failure instanceof ApiError && failure.status === 401) return; // Signed out: the sign-in screen says why.
+      const error = errorMessage(failure);
       setLoaded((previous) => ({
         userId,
         conversations: previous?.userId === userId ? previous.conversations : null,
-        error: errorMessage(error),
+        error,
       }));
     }
   }, [call, userId]);

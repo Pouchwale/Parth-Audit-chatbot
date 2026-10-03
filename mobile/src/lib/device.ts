@@ -33,10 +33,16 @@ export function nameInSettings(): string {
   return Constants.executionEnvironment === ExecutionEnvironment.StoreClient ? 'Expo Go' : 'this app';
 }
 
+let zone: { value: string | undefined } | null = null;
+
+/** The device's IANA time zone, e.g. "Asia/Kolkata", looked up once. */
 export function timeZone(): string | undefined {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone;
-  } catch {
-    return undefined;
+  if (!zone) {
+    try {
+      zone = { value: Intl.DateTimeFormat().resolvedOptions().timeZone };
+    } catch {
+      zone = { value: undefined };
+    }
   }
+  return zone.value;
 }

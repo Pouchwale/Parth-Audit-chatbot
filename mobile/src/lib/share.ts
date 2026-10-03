@@ -4,6 +4,7 @@ import type { ConversationExport } from '@shared/api';
 import { announce } from './announce';
 import { api, ApiError } from './api';
 import { useAuth } from './auth';
+import type { Call } from './call';
 import { timeZone } from './device';
 import { canSaveExports, saveExport } from './export-file';
 import { tapFeedback } from './haptics';
@@ -34,6 +35,33 @@ export interface ShareConversation {
   reset(): void;
 }
 
+/** Prepares the file and hands it over: how it went. Idle means the person was signed out (the sign-in screen says why). */
+async function shareNow(call: Call, conversationId: string): Promise<ShareState> {
+  if (preparing) return { status: 'failed', error: BUSY, retryable: true };
+  preparing = true;
+  try {
+    let file: ConversationExport;
+    try {
+      // Checked first: a file this device can't take must not be recorded as handed out.
+      if (!(await canSaveExports())) return { status: 'failed', error: CANT_SHARE, retryable: false };
+      // Browsers download the file; phones hand it to the share sheet.
+      const purpose = Platform.OS === 'web' ? 'download' : 'share';
+      file = await call((token) => api.exportConversation(token, conversationId, { timeZone: timeZone(), purpose }));
+    } finally {
+      preparing = false;
+    }
+    await saveExport(file);
+    const done = Platform.OS === 'web' ? 'Downloaded' : 'Exported';
+    return { status: 'done', message: `${done} “${file.filename}”. ${DOWNLOADS_RECORDED}` };
+  } catch (error) {
+    if (!(error instanceof ApiError)) return { status: 'failed', error: NOT_SAVED, retryable: true };
+    if (error.status === 401) return { status: 'idle' };
+    // Unreachable (0), too many in a minute (429) or a server fault (5xx) can pass; a refusal stays one.
+    const retryable = error.status === 0 || error.status === 429 || error.status >= 500;
+    return { status: 'failed', error: error.message, retryable };
+  }
+}
+
 export function useShareConversation(): ShareConversation {
   const { call } = useAuth();
   const [state, setState] = useState<ShareState>({ status: 'idle' });
@@ -44,40 +72,15 @@ export function useShareConversation(): ShareConversation {
   async function share(conversationId: string) {
     if (running.current) return;
     const attempt = ++latest.current;
-    const report = (next: ShareState) => {
-      if (attempt !== latest.current) return;
-      setState(next);
-      if (next.status === 'done') announce(next.message);
-      if (next.status === 'failed') announce(next.error);
-    };
     tapFeedback();
-    if (preparing) return report({ status: 'failed', error: BUSY, retryable: true });
     running.current = true;
-    preparing = true;
     setState({ status: 'exporting' });
-    try {
-      let file: ConversationExport;
-      try {
-        // Checked first: a file this device can't take must not be recorded as handed out.
-        if (!(await canSaveExports())) return report({ status: 'failed', error: CANT_SHARE, retryable: false });
-        // Browsers download the file; phones hand it to the share sheet.
-        const purpose = Platform.OS === 'web' ? 'download' : 'share';
-        file = await call((token) => api.exportConversation(token, conversationId, { timeZone: timeZone(), purpose }));
-      } finally {
-        preparing = false;
-      }
-      await saveExport(file);
-      const done = Platform.OS === 'web' ? 'Downloaded' : 'Exported';
-      report({ status: 'done', message: `${done} “${file.filename}”. ${DOWNLOADS_RECORDED}` });
-    } catch (error) {
-      if (!(error instanceof ApiError)) return report({ status: 'failed', error: NOT_SAVED, retryable: true });
-      if (error.status === 401) return report({ status: 'idle' }); // Signed out: the sign-in screen says why.
-      // Unreachable (0), too many in a minute (429) or a server fault (5xx) can pass; a refusal stays one.
-      const retryable = error.status === 0 || error.status === 429 || error.status >= 500;
-      report({ status: 'failed', error: error.message, retryable });
-    } finally {
-      if (attempt === latest.current) running.current = false;
-    }
+    const outcome = await shareNow(call, conversationId);
+    if (attempt !== latest.current) return;
+    running.current = false;
+    setState(outcome);
+    if (outcome.status === 'done') announce(outcome.message);
+    if (outcome.status === 'failed') announce(outcome.error);
   }
 
   function reset() {

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { useAuth } from './auth';
 import { ChatSession, type ChatSessionDeps, type ChatState } from './chat-session';
 import { useConversations } from './conversations';
@@ -10,10 +10,14 @@ import { useConversations } from './conversations';
 class ChatSessions {
   private readonly running = new Set<ChatSession>();
   private readonly deps: ChatSessionDeps;
+  /** The newest sign-in's way of calling the API and refreshing the list: sessions outlive renders, so the provider keeps this current. */
+  private readonly latest: RefObject<Omit<ChatSessionDeps, 'busy'>>;
 
-  constructor(deps: Omit<ChatSessionDeps, 'busy'>) {
+  constructor(latest: RefObject<Omit<ChatSessionDeps, 'busy'>>) {
+    this.latest = latest;
     this.deps = {
-      ...deps,
+      call: (request) => this.latest.current.call(request),
+      changed: () => this.latest.current.changed(),
       busy: (session, busy) => {
         if (busy) this.running.add(session);
         else this.running.delete(session);
@@ -40,19 +44,11 @@ const ChatSessionsContext = createContext<ChatSessions | null>(null);
 export function ChatSessionsProvider({ children }: { children: ReactNode }) {
   const { call } = useAuth();
   const { refresh } = useConversations();
-  // Sessions outlive renders, so they reach the newest sign-in through this.
-  const latest = useRef({ call, refresh });
+  const latest = useRef({ call, changed: () => void refresh() });
   useEffect(() => {
-    latest.current = { call, refresh };
+    latest.current = { call, changed: () => void refresh() };
   }, [call, refresh]);
-
-  const [sessions] = useState(
-    () =>
-      new ChatSessions({
-        call: (request) => latest.current.call(request),
-        changed: () => void latest.current.refresh(),
-      }),
-  );
+  const [sessions] = useState(() => new ChatSessions(latest));
   useEffect(() => () => sessions.abandonAll(), [sessions]);
 
   return <ChatSessionsContext.Provider value={sessions}>{children}</ChatSessionsContext.Provider>;
