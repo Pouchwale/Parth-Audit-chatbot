@@ -1,22 +1,25 @@
 // What of DCRS's answers the model is given. DCRS answers in full (a record carries its layout, how a patch is written,
 // its values in words and as stored, and up to 50 history entries), while the model's budget is a few thousand
 // characters an answer. So each kind of answer keeps what the model needs to act first (ids, status, what can be done,
-// the field keys and the patch shape), then adds the rest while it fits, and says what it left out. Every answer is
-// read defensively: an answer shaped otherwise is passed on, cut to the budget by fit().
-import { BUDGET, fit, shorten, WEB_ONLY, without } from './fit.ts';
+// the field keys and the patch shape), then adds the rest while it fits, and says what it left out. Lists of like things
+// go as tables (the keys once, then a row for each), and a record's values as lines of text: written out as objects,
+// the same facts cost two to three times as much. Every answer is read defensively: an answer shaped otherwise is
+// passed on, cut to the budget by fit().
+import { BUDGET, fit, shorten, table, tables, WEB_ONLY, WEB_ONLY_IN_LISTS, without } from './fit.ts';
 
 type Obj = Record<string, unknown>;
 
 const isObj = (value: unknown): value is Obj => !!value && typeof value === 'object' && !Array.isArray(value);
 const size = (value: unknown) => JSON.stringify(value ?? null).length;
 const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+const isEmpty = (item: unknown) => item === undefined || item === null || item === '' || (Array.isArray(item) && item.length === 0);
 
 /** The keys of `value` that are set, in this order, leaving out the empty ones. */
 function pick(value: Obj, keys: readonly string[]): Obj {
   const out: Obj = {};
   for (const key of keys) {
     const item = value[key];
-    if (item !== undefined && item !== null && item !== '' && !(Array.isArray(item) && item.length === 0)) out[key] = item;
+    if (!isEmpty(item)) out[key] = item;
   }
   return out;
 }
@@ -58,6 +61,14 @@ function finish(target: Obj, said: Notes, budget: number): unknown {
   return fit(target, budget);
 }
 
+/** A table of the items, with a last line saying how many more there were when not all are shown. */
+function tableOf(items: unknown[], more = 0): unknown {
+  if (more <= 0) return table(items);
+  const shown = table(items);
+  const note = `…and ${more} more`;
+  return isObj(shown) && Array.isArray(shown.rows) ? { ...shown, rows: [...shown.rows, note] } : [...items, note];
+}
+
 const departmentName = (value: unknown) => (isObj(value) ? (value.name ?? value.code) : value);
 
 /** A document as a list shows it. */
@@ -91,8 +102,16 @@ function recordBrief(item: unknown, oneDocument: boolean): unknown {
 
 /** find_documents: the person's documents, the ones kept by other departments, and the formats not in DCRS yet. */
 export function documentsForModel(answer: unknown): unknown {
-  if (!isObj(answer) || !Array.isArray(answer.documents)) return fit(without(answer, WEB_ONLY), BUDGET.list);
-  return fit({ ...pick(answer, ['query', 'total']), documents: answer.documents.map(documentBrief), ...pick(answer, ['kept', 'notInDcrs']) }, BUDGET.list);
+  if (!isObj(answer) || !Array.isArray(answer.documents)) return fit(tables(without(answer, WEB_ONLY)), BUDGET.list);
+  const others = pick(answer, ['kept', 'notInDcrs']);
+  return fit(
+    {
+      ...pick(answer, ['query', 'total']),
+      documents: table(answer.documents.map(documentBrief)),
+      ...Object.fromEntries(Object.entries(others).map(([key, items]) => [key, table(list(items))])),
+    },
+    BUDGET.list,
+  );
 }
 
 /** get_document: what it is, who fills it in, when and how, then its layout and how a patch is written. */
@@ -100,8 +119,8 @@ export function documentForModel(answer: unknown): unknown {
   if (!isObj(answer)) return fit(answer, BUDGET.one);
   const out: Obj = { ...(documentBrief(answer) as Obj), ...pick(answer, ['kind', 'revisionNo', 'revisionDate', 'description', 'what', 'who', 'when', 'how', 'patchShape']) };
   const said = notes();
-  addWhileFits(out, 'records', answer.records, BUDGET.one, said);
-  addWhileFits(out, 'layout', answer.layout, BUDGET.one, said);
+  addWhileFits(out, 'records', tables(answer.records), BUDGET.one, said);
+  addWhileFits(out, 'layout', layoutBrief(answer.layout), BUDGET.one, said);
   return finish(without(out, WEB_ONLY) as Obj, said, BUDGET.one);
 }
 
@@ -118,11 +137,11 @@ export function todayForModel(answer: unknown): unknown {
     const items = list(answer[key]);
     if (items.length === 0) continue;
     const shown = key === 'upcoming' ? items.slice(0, 5) : items;
-    addWhileFits(out, key, [...shown.map((item) => recordBrief(item, false)), ...(shown.length < items.length ? [`…and ${items.length - shown.length} more`] : [])], BUDGET.list, said);
+    addWhileFits(out, key, tableOf(shown.map((item) => recordBrief(item, false)), items.length - shown.length), BUDGET.list, said);
   }
   if (answer.tomorrow) addWhileFits(out, 'tomorrow', day(answer.tomorrow), BUDGET.list, said);
   if (answer.weeklyOff) addWhileFits(out, 'weeklyOff', answer.weeklyOff, BUDGET.list, said);
-  if (Array.isArray(answer.nextHolidays)) addWhileFits(out, 'nextHolidays', answer.nextHolidays.slice(0, 4).map(day), BUDGET.list, said);
+  if (Array.isArray(answer.nextHolidays)) addWhileFits(out, 'nextHolidays', table(answer.nextHolidays.slice(0, 4).map(day)), BUDGET.list, said);
   if (typeof answer.facts === 'string') addWhileFits(out, 'facts', answer.facts, BUDGET.list, said);
   return finish(out, said, BUDGET.list);
 }
@@ -130,7 +149,7 @@ export function todayForModel(answer: unknown): unknown {
 /** list_records and search_records: each record's id, date and status (and the search's snippet). */
 export function recordsForModel(answer: unknown): unknown {
   const items = isObj(answer) ? (Array.isArray(answer.records) ? answer.records : Array.isArray(answer.hits) ? answer.hits : undefined) : undefined;
-  if (!isObj(answer) || !items) return fit(without(answer, WEB_ONLY), BUDGET.list);
+  if (!isObj(answer) || !items) return fit(tables(without(answer, WEB_ONLY)), BUDGET.list);
   const key = Array.isArray(answer.records) ? 'records' : 'hits';
   const oneDocument = !!answer.document || (items.length > 0 && items.every((item) => isObj(item) && isObj(items[0]) && item.documentId === items[0].documentId));
   const first = items.find(isObj);
@@ -139,10 +158,72 @@ export function recordsForModel(answer: unknown): unknown {
     {
       ...(isObj(document) && Object.keys(document).length > 0 ? { document } : {}),
       ...pick(answer, ['query', 'from', 'to', 'status', 'total', 'complete', 'note']),
-      [key]: items.map((item) => recordBrief(item, oneDocument)),
+      [key]: table(items.map((item) => recordBrief(item, oneDocument))),
     },
     BUDGET.list,
   );
+}
+
+/** A layout without its empty parts (a log sheet with no boxes above or below its lines says so twice). */
+function layoutBrief(layout: unknown): unknown {
+  if (!isObj(layout)) return layout;
+  return Object.fromEntries(Object.entries(layout).filter(([, item]) => !isEmpty(item)));
+}
+
+const oneLine = (value: unknown) => String(value ?? '').replace(/\s*\n\s*/g, ' ').replace(/\|/g, '/').trim();
+/** The most columns a table of values is given. Lines with more labels than that are written out one by one. */
+const MAX_VALUE_COLUMNS = 10;
+
+/**
+ * A record's values in words (DCRS's inWords: a label and a value for each, with the line it is on) as lines of text:
+ * "Label: value" for a value on its own, and for the lines of a sheet a table, the labels once and a row for each
+ * line. Said as one object a value, a sheet of 24 lines takes three times the room and was cut off part-way.
+ */
+function valueLines(inWords: unknown): unknown {
+  const items = list(inWords);
+  if (items.length === 0 || !items.every((item) => isObj(item) && typeof item.label === 'string')) return inWords;
+
+  // The values of one line of the sheet, in the order DCRS gave them.
+  const lines: { where?: string; cells: [label: string, value: string][] }[] = [];
+  for (const item of items as Obj[]) {
+    const where = typeof item.where === 'string' && item.where ? item.where : undefined;
+    const cell: [string, string] = [oneLine(item.label), oneLine(item.value)];
+    const last = lines.at(-1);
+    if (where !== undefined && last?.where === where) last.cells.push(cell);
+    else lines.push(where === undefined ? { cells: [cell] } : { where, cells: [cell] });
+  }
+
+  const out: string[] = [];
+  for (let start = 0; start < lines.length; ) {
+    const line = lines[start]!;
+    if (line.where === undefined) {
+      out.push(`${line.cells[0]![0]}: ${line.cells[0]![1]}`);
+      start++;
+      continue;
+    }
+    // The lines after it that share its labels make one table.
+    const columns = line.cells.map(([label]) => label);
+    let end = start + 1;
+    for (; end < lines.length; end++) {
+      const next = lines[end]!;
+      if (next.where === undefined || !next.cells.some(([label]) => columns.includes(label))) break;
+      const added = next.cells.map(([label]) => label).filter((label) => !columns.includes(label));
+      if (columns.length + added.length > MAX_VALUE_COLUMNS) break;
+      columns.push(...added);
+    }
+    if (end - start < 2 || columns.length > MAX_VALUE_COLUMNS) {
+      out.push(`${line.where}: ${line.cells.map(([label, value]) => `${label}: ${value}`).join('; ')}`);
+      start++;
+      continue;
+    }
+    out.push(['Line', ...columns].join(' | '));
+    for (const row of lines.slice(start, end)) {
+      const values = new Map(row.cells);
+      out.push([row.where, ...columns.map((label) => values.get(label) ?? '')].join(' | '));
+    }
+    start = end;
+  }
+  return out;
 }
 
 /** get_record (and the record open_record answers with): what it is and what can be done first, then its values. */
@@ -157,8 +238,8 @@ export function recordForModel(record: unknown, budget: number = BUDGET.one): un
     ...pick(record, ['patchShape']),
   };
   const said = notes();
-  addWhileFits(out, 'layout', record.layout, budget, said);
-  addWhileFits(out, 'inWords', record.inWords, budget, said);
+  addWhileFits(out, 'layout', layoutBrief(record.layout), budget, said);
+  addWhileFits(out, 'values', valueLines(record.inWords), budget, said);
   const history = list(record.history);
   if (history.length > 0) {
     addWhileFits(out, 'history', history.slice(-4).map(historyBrief), budget, said);
@@ -166,7 +247,8 @@ export function recordForModel(record: unknown, budget: number = BUDGET.one): un
   }
   addWhileFits(out, 'linked', record.linked, budget, said);
   // The values as stored only whole, and only when the values in words are whole too: they say the same for reading.
-  if (said.cut.includes('inWords') && record.data !== undefined) said.leftOut.push('data');
+  // As stored, not as a table: the patch is written in this shape, and the model copies it.
+  if (said.cut.includes('values') && record.data !== undefined) said.leftOut.push('data');
   else addWhileFits(out, 'data', record.data, budget, said, true);
   return finish(without(out, WEB_ONLY) as Obj, said, budget);
 }
@@ -182,7 +264,18 @@ export function changeForModel(answer: unknown): unknown {
   if (!isObj(answer)) return fit(answer, BUDGET.change);
   const out: Obj = { ...(without(answer, WEB_ONLY) as Obj) };
   if (Array.isArray(out.history)) out.history = out.history.map(historyBrief);
+  if (Array.isArray(out.changes)) out.changes = table(out.changes);
   return fit(out, BUDGET.change);
+}
+
+/** A list DCRS answers with as it is, such as findings, complaints or people: its lists as tables, and no web links. */
+export function listForModel(answer: unknown): unknown {
+  return fit(tables(without(answer, WEB_ONLY_IN_LISTS)), BUDGET.list);
+}
+
+/** One thing DCRS answers with as it is, such as a finding or a day's pest control report. */
+export function oneForModel(answer: unknown): unknown {
+  return fit(tables(without(answer, WEB_ONLY)), BUDGET.one);
 }
 
 /** A machine of the equipment list, without what is blank, and without the summary its columns already say. */
@@ -203,7 +296,7 @@ export function equipmentForModel(answer: unknown): unknown {
   const register = isObj(answer.list) ? pick(answer.list, ['formatNo', 'name', 'status', 'machines', 'numbered', 'gaps']) : {};
   if (Object.keys(register).length > 0) out.list = register;
   const said = notes();
-  addWhileFits(out, 'machines', list(answer.machines).map(machineBrief), BUDGET.one, said);
+  addWhileFits(out, 'machines', table(list(answer.machines).map(machineBrief)), BUDGET.one, said);
   return finish(out, said, BUDGET.one);
 }
 
@@ -241,7 +334,7 @@ function escalationBrief(escalation: unknown): unknown {
   return {
     ...pick(escalation, ['subjectName', 'kind', 'departmentName', 'late', 'neverDone', 'sentence', 'people']),
     ...(escalation.acknowledged === true ? pick(escalation, ['acknowledgedBy', 'acknowledgedAt']) : {}),
-    ...(records.length > 0 ? { records } : {}),
+    ...(records.length > 0 ? { records: table(records) } : {}),
   };
 }
 

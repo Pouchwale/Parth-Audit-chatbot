@@ -168,7 +168,13 @@ export const RECORD = {
   updatedAt: '2026-09-30T06:00:00.000Z',
 };
 
-/** What the model is given of RECORD: what it is and what can be done first, the last four history entries in brief, and nothing of the web app's. */
+/** RECORD's layout without its empty parts, as the model is given it. */
+export const LAYOUT_FOR_MODEL = { kind: RECORD.layout.kind, header: RECORD.layout.header, columns: RECORD.layout.columns, rows: RECORD.layout.rows };
+
+/**
+ * What the model is given of RECORD: what it is and what can be done first, its values as lines of text, the last four
+ * history entries in brief, and nothing of the web app's.
+ */
 export const RECORD_FOR_MODEL = {
   recordId: 'rec-1',
   documentId: DOC_BRIEF.id,
@@ -180,8 +186,8 @@ export const RECORD_FOR_MODEL = {
   actions: ['submit', 'delete'],
   prepared: { at: '2026-09-30T03:10:00.000Z', notes: ['Line numbers carried from yesterday'] },
   patchShape: RECORD.patchShape,
-  layout: RECORD.layout,
-  inWords: RECORD.inWords,
+  layout: LAYOUT_FOR_MODEL,
+  values: ['Line No.: 3', 'row 1: Status: OK'],
   history: [3, 4, 5, 6].map((n) => ({ at: `2026-09-30T0${n}:00:00.000Z`, by: 'Kapila Barad', action: 'assistant-edit', note: `Through Mitra mobile app: change ${n}`, fieldsChanged: 1 })),
   historyTotal: 6,
   data: RECORD.data,

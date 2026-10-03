@@ -89,6 +89,7 @@ it("turns a sign-in down in DCRS's own words outside working hours, and a wrong 
 it("answers a lookup at once, and starts today's record only once the person confirms", async () => {
   const { login, as, dcrs, model } = await start({
     'GET /api/v1/today': () => json(200, { today: '2026-09-30', workingDay: true, due: [{ document: 'Daily Pest Control Monitoring Record', documentId: 'daily-pest-monitoring' }] }),
+    'GET /api/v1/documents/daily-pest-monitoring': () => json(200, { id: 'daily-pest-monitoring', formatNo: 'F/HR/17', name: 'Daily Pest Control Monitoring Record' }),
     'POST /api/v1/records': () => json(201, { recordId: 'rec-new', existed: false, status: 'Draft', date: '2026-09-30' }),
   });
   const token = (await login()).json<LoginResponse>().token;
@@ -103,9 +104,11 @@ it("answers a lookup at once, and starts today's record only once the person con
   model.queue(callsTool('dcrs__open_record', { documentId: 'daily-pest-monitoring' }, "I'll start today's record."));
   const proposed = (await kapila.post('/assistant/messages', { text: "Start today's pest control record", conversationId: facts.conversationId })).json<AssistantReply>();
   expect(proposed.confirmation?.changes).toEqual([
-    { system: 'Digital Controlled Record System', summary: "Open today's record of daily-pest-monitoring, starting it if there is none yet" },
+    { system: 'Digital Controlled Record System', summary: "Open today's record of F/HR/17 Daily Pest Control Monitoring Record, starting it if there is none yet" },
   ]);
+  // Described by asking DCRS which document the words name; nothing started yet.
   expect(dcrs.seen.filter((r) => r.path === '/api/v1/records')).toEqual([]);
+  expect(dcrs.seen.filter((r) => r.path === '/api/v1/documents/daily-pest-monitoring')).toHaveLength(1);
 
   model.queue(says("Done. Today's record is started."));
   const done = await kapila.post(`/assistant/conversations/${proposed.conversationId}/decision`, { confirmationId: proposed.confirmation!.id, decision: 'confirm' });

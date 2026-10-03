@@ -1,12 +1,12 @@
 import { describe as group, expect, it } from 'vitest';
 import { z } from 'zod';
 import { CLIENT_NAME, filenameOf, sessionCookie } from '../src/connectors/dcrs/client.ts';
-import { fit, SHORTENED, WEB_ONLY_IN_LISTS, without } from '../src/connectors/dcrs/fit.ts';
+import { fit, SHORTENED, table, WEB_ONLY_IN_LISTS, without } from '../src/connectors/dcrs/fit.ts';
 import { createDcrsConnector } from '../src/connectors/dcrs/index.ts';
 import { patchInWords } from '../src/connectors/dcrs/inputs.ts';
 import { equipmentForModel, escalationsForModel, insightsForModel, recordForModel, todayForModel } from '../src/connectors/dcrs/shape.ts';
 import { createRegistry } from '../src/connectors/registry.ts';
-import { ConnectorError, splitResult } from '../src/connectors/types.ts';
+import { ConnectorError, splitResult, type Described } from '../src/connectors/types.ts';
 import {
   actionOf,
   BASE,
@@ -18,6 +18,7 @@ import {
   ESCALATIONS,
   INSIGHTS,
   json,
+  LAYOUT_FOR_MODEL,
   LIST_ITEM,
   ME,
   NOW,
@@ -53,7 +54,16 @@ const READS = [
   'insights',
   'escalations',
 ];
-const WRITES =['open_record', 'edit_record', 'record_action', 'add_photo_to_record', 'fill_record_with_sample_data', 'close_finding'];
+/** The most the tool definitions may take, in characters of JSON. */
+const TOOLS_BUDGET = 8_800;
+
+/** A describe() answer's sentence, whether it came alone or with the input as resolved. */
+const summaryOf = (said: string | Described<unknown>) => (typeof said === 'string' ? said : said.summary);
+
+/** F/HR/17 as GET /api/v1/documents/daily-pest-monitoring answers. */
+const PEST_DOC = { id: 'daily-pest-monitoring', formatNo: 'F/HR/17', name: 'Daily Pest Control Monitoring Record', kind: 'daily-pest-monitoring' };
+
+const WRITES = ['open_record', 'edit_record', 'record_action', 'add_photo_to_record', 'fill_record_with_sample_data', 'close_finding'];
 
 function expectSentAsThePerson(request: { headers: Record<string, string> }) {
   expect(request.headers['x-client-name']).toBe('Mitra mobile app');
@@ -89,13 +99,14 @@ group('the connector', () => {
   it('describes every action well enough to use, within the model budget', () => {
     const { connector } = standInDcrs();
     const tools = connector.actions.map((a) => JSON.stringify({ name: `dcrs__${a.name}`, description: a.description, parameters: z.toJSONSchema(a.input, { io: 'input' }) }));
-    // The Groq key allows 8,000 tokens a minute; about four characters make a token.
-    expect(tools.join('').length).toBeLessThan(9_000);
+    // The Groq key allows 8,000 tokens a minute, and every call carries every tool; about four characters make a token.
+    expect(tools.join('').length).toBeLessThan(TOOLS_BUDGET);
     const edit = actionOf(connector.actions, 'edit_record').description;
     for (const words of ['get_record', '{fieldKey: value}', 'itemEdits', 'checkpoints', 'reopen']) expect(edit).toContain(words);
     expect(actionOf(connector.actions, 'record_action').description).toMatch(/send_back, reopen and delete need/);
     expect(actionOf(connector.actions, 'get_pest_control_report').description).toMatch(/ask/);
-    expect(connector.description).toMatch(/find_documents, open_record, get_record .*edit_record/);
+    expect(connector.description).toMatch(/get_record or open_record .*edit_record, then record_action submit/);
+    expect(connector.description).toMatch(/format number/);
   });
 });
 
@@ -256,7 +267,7 @@ const CASES: Case[] = [
       how: 'Tick each point',
       patchShape: RECORD.patchShape,
       records: { count: 1, latest: [] },
-      layout: RECORD.layout,
+      layout: LAYOUT_FOR_MODEL,
     },
   },
   {
@@ -272,7 +283,7 @@ const CASES: Case[] = [
       needsInput: [{ recordId: 'rec-1', documentId: DOC_BRIEF.id, formatNo: 'F/QC/15-A', document: DOC_BRIEF.name, dueDate: '2026-09-30', status: 'In Progress', problems: ['Line No. is required'] }],
       tomorrow: { date: '2026-10-01', weekday: 'Thursday', kind: 'weekly-off', label: 'Weekly off' },
       weeklyOff: { day: 'Thursday', next: '2026-10-01' },
-      nextHolidays: [1, 2, 3, 4].map((n) => ({ date: `2026-10-0${n}`, weekday: 'Thursday', kind: 'holiday', name: `Holiday ${n}`, label: `Holiday ${n}` })),
+      nextHolidays: table([1, 2, 3, 4].map((n) => ({ date: `2026-10-0${n}`, weekday: 'Thursday', kind: 'holiday', name: `Holiday ${n}`, label: `Holiday ${n}` }))),
       facts: TODAY.facts,
     },
   },
@@ -301,10 +312,10 @@ const CASES: Case[] = [
       from: '2026-08-30',
       to: '2026-09-30',
       total: 2,
-      records: [
+      records: table([
         { recordId: 'rec-1', documentId: DOC_BRIEF.id, formatNo: 'F/QC/15-A', document: DOC_BRIEF.name, dueDate: '2026-09-30', status: 'In Progress' },
         { recordId: null, documentId: 'daily-pest-monitoring', formatNo: 'F/HR/17', document: 'Daily Pest Control Monitoring Record', dueDate: '2026-09-30', status: 'Due' },
-      ],
+      ]),
     },
   },
   {
@@ -447,7 +458,7 @@ const CASES: Case[] = [
           late: 3,
           neverDone: 0,
           sentence: '3 late in the 30 days to 02-Oct-2026 — F-QC-30: 3 late',
-          records: [1, 2, 3].map((n) => ({ what: 'F-QC-30', dueDate: `2026-09-2${n}`, outcome: 'late', daysLate: n })),
+          records: table([1, 2, 3].map((n) => ({ what: 'F-QC-30', dueDate: `2026-09-2${n}`, outcome: 'late', daysLate: n }))),
         },
       ],
     },
@@ -587,8 +598,11 @@ group('the actions', () => {
   it("adds a photo from the conversation to a record, as DCRS's photo route takes it", async () => {
     const { connector, seen } = standInDcrs({ 'POST /api/v1/records/rec-1/photos': () => json(200, { ...CHANGED, added: PHOTO.filename, list: 'photos', count: 1 }) });
     const add = actionOf(connector.actions, 'add_photo_to_record');
-    expect(await add.describe({ recordId: 'rec-1', fileId: PHOTO.id }, ctx)).toBe('Add the photo "line-3 clearance.jpg" to record rec-1');
-    expect(await add.describe({ recordId: 'rec-1', fileId: PHOTO.id, note: 'Line 3 before the job' }, ctx)).toBe(
+    expect(await add.describe({ recordId: 'rec-1', fileId: PHOTO.id }, ctx)).toEqual({
+      summary: 'Add the photo "line-3 clearance.jpg" to record rec-1',
+      input: { recordId: 'rec-1', fileId: PHOTO.id },
+    });
+    expect(summaryOf(await add.describe({ recordId: 'rec-1', fileId: PHOTO.id, note: 'Line 3 before the job' }, ctx))).toBe(
       'Add the photo "line-3 clearance.jpg" to record rec-1 (note: "Line 3 before the job")',
     );
     expect(await add.run(ctx, { recordId: 'rec-1', fileId: PHOTO.id })).toEqual({ ...CHANGED_FOR_MODEL, added: PHOTO.filename, list: 'photos', count: 1 });
@@ -659,14 +673,21 @@ group('the actions', () => {
 
 group('what the person is asked to confirm', () => {
   const words = async (name: string, input: Record<string, unknown>) => {
-    const { connector } = standInDcrs();
+    const { connector } = standInDcrs({
+      'GET /api/v1/documents/daily-pest-monitoring': () => json(200, PEST_DOC),
+      'GET /api/v1/documents/F-QC-15-A': () => json(200, DOC_BRIEF),
+    });
     const action = actionOf(connector.actions, name);
-    return action.describe(action.input.parse(input), ctx);
+    return summaryOf(await action.describe(action.input.parse(input), ctx));
   };
 
-  it('says each change in plain words, from the call itself', async () => {
-    expect(await words('open_record', { documentId: 'daily-pest-monitoring' })).toBe("Open today's record of daily-pest-monitoring, starting it if there is none yet");
-    expect(await words('open_record', { documentId: 'qc-line', date: '2026-09-29' })).toBe('Open the record of qc-line for 2026-09-29, starting it if there is none yet');
+  it('says each change in plain words, from the call itself, naming the document as DCRS does', async () => {
+    expect(await words('open_record', { documentId: 'daily-pest-monitoring' })).toBe(
+      "Open today's record of F/HR/17 Daily Pest Control Monitoring Record, starting it if there is none yet",
+    );
+    expect(await words('open_record', { documentId: 'F-QC-15-A', date: '2026-09-29' })).toBe(
+      'Open the record of F/QC/15-A Area Line Clearance – Printing for 2026-09-29, starting it if there is none yet',
+    );
     expect(await words('edit_record', { recordId: 'rec-1', patch: { temperature: 4, remarks: 'All clear' }, note: 'Reading at 9' })).toBe(
       'In record rec-1, set temperature to 4; remarks to "All clear" (note: "Reading at 9")',
     );
@@ -814,10 +835,11 @@ group('keeping answers small for the model', () => {
     const shaped = recordForModel(big) as Record<string, unknown>;
     expect(JSON.stringify(shaped).length).toBeLessThanOrEqual(4_500);
     expect(shaped).toMatchObject({ recordId: 'rec-1', status: 'In Progress', editable: true, actions: ['submit', 'delete'], patchShape: RECORD.patchShape });
-    expect(shaped.layout).toEqual(big.layout);
+    const { footer: _, ...layout } = big.layout;
+    expect(shaped.layout).toEqual(layout);
     expect(shaped.data).toBeUndefined();
     expect(shaped.leftOut).toMatch(/Not shown, to keep this brief: .*data/);
-    expect(JSON.stringify(shaped.inWords)).toMatch(/more not shown/);
+    expect(JSON.stringify(shaped.values)).toMatch(/more not shown/);
     // An answer of another shape is only cut to the budget.
     expect(recordForModel('odd')).toBe('odd');
   });
@@ -881,4 +903,90 @@ it('joins routes onto a base URL with a path of its own', async () => {
   });
   await actionOf(connector.actions, 'find_documents').run(ctx, { q: 'F/HR/17' });
   expect(seen).toEqual([`${BASE}/dcrs/api/v1/documents?q=F%2FHR%2F17&limit=20`]);
+});
+
+group('naming a record by its document', () => {
+  const day = (records: unknown[]) => json(200, { document: DOC_BRIEF, from: '2026-09-30', to: '2026-09-30', total: records.length, records });
+  const describeOf = async (routes: Record<string, Route>, name: string, input: Record<string, unknown>) => {
+    const { connector, seen } = standInDcrs(routes);
+    const action = actionOf(connector.actions, name);
+    const said = await action.describe(action.input.parse(input), ctx);
+    return { said, seen };
+  };
+  const LABEL = 'F/QC/15-A Area Line Clearance – Printing';
+
+  it("names today's record of a document by its format number, asking DCRS which record that is", async () => {
+    const { said, seen } = await describeOf({ 'GET /api/v1/records': () => day([LIST_ITEM]) }, 'fill_record_with_sample_data', { documentId: 'F-QC-15-A' });
+    expect(said).toEqual({ summary: `Fill today's record of ${LABEL} with sample data (made up and marked so; it stays a draft)`, input: { recordId: 'rec-1' } });
+    expect(seen).toMatchObject([{ method: 'GET', path: '/api/v1/records', query: { documentId: 'F-QC-15-A', from: 'today', to: 'today', limit: '5' } }]);
+    expectSentAsThePerson(seen[0]!);
+  });
+
+  it('starts a record not started yet as part of a change, says so on the card, and tells the model', async () => {
+    const { said } = await describeOf({ 'GET /api/v1/records': () => day([]) }, 'fill_record_with_sample_data', { documentId: 'F-QC-15-A' });
+    expect(said).toEqual({
+      summary: `Start today's record of ${LABEL} and fill it with sample data (made up and marked so; it stays a draft)`,
+      input: { documentId: DOC_BRIEF.id, date: '2026-09-30' },
+    });
+    // When it runs, the record is started first, then filled.
+    const { connector, seen } = standInDcrs({
+      'POST /api/v1/records': () => json(201, { created: true, record: RECORD }),
+      'POST /api/v1/records/rec-1/sample-fill': () => json(200, CHANGED),
+    });
+    const result = await actionOf(connector.actions, 'fill_record_with_sample_data').run(ctx, { documentId: DOC_BRIEF.id, date: '2026-09-30' });
+    expect(result).toEqual({ started: 'The record was started first.', ...CHANGED_FOR_MODEL });
+    expect(seen.map((r) => `${r.method} ${r.path}`)).toEqual(['POST /api/v1/records', 'POST /api/v1/records/rec-1/sample-fill']);
+    expect(seen[0]!.body).toEqual({ documentId: DOC_BRIEF.id, date: '2026-09-30' });
+  });
+
+  it('edits and photographs a record by its document too, and names a dated record as such', async () => {
+    const { said } = await describeOf({ 'GET /api/v1/records': () => day([LIST_ITEM]) }, 'edit_record', { documentId: 'F-QC-15-A', date: '2026-09-29', patch: { lineNo: '4' } });
+    expect(said).toEqual({ summary: `In the record of ${LABEL} for 2026-09-29, set lineNo to "4"`, input: { recordId: 'rec-1', patch: { lineNo: '4' } } });
+    const empty = await describeOf({ 'GET /api/v1/records': () => day([]) }, 'edit_record', { documentId: 'F-QC-15-A', patch: { lineNo: '4' } });
+    expect(summaryOf(empty.said)).toBe(`Start today's record of ${LABEL} and set lineNo to "4"`);
+    const photo = await describeOf({ 'GET /api/v1/records': () => day([]) }, 'add_photo_to_record', { documentId: 'F-QC-15-A', fileId: PHOTO.id });
+    expect(summaryOf(photo.said)).toBe(`Start today's record of ${LABEL} and add the photo "line-3 clearance.jpg" to it`);
+  });
+
+  it('reads, prints and moves on only a record that exists, and says how to start one', async () => {
+    const { said, seen } = await describeOf({ 'GET /api/v1/records': () => day([LIST_ITEM]) }, 'get_record', { documentId: 'F-QC-15-A' });
+    expect(said).toEqual({ summary: `Read today's record of ${LABEL}`, input: { recordId: 'rec-1' } });
+    expect(seen).toHaveLength(1);
+    const { connector } = standInDcrs({ 'GET /api/v1/records': () => day([]) });
+    for (const [name, input] of [['get_record', {}], ['record_pdf', {}], ['record_action', { action: 'submit' }]] as const) {
+      const action = actionOf(connector.actions, name);
+      await expect(action.describe(action.input.parse({ documentId: 'F-QC-15-A', ...input }), ctx)).rejects.toMatchObject({
+        kind: 'not_found',
+        message: `There is no record of ${LABEL} for today yet. open_record starts one.`,
+      });
+    }
+    const submit = actionOf(connector.actions, 'record_action');
+    expect(summaryOf(await submit.describe({ recordId: 'rec-1', action: 'submit' }, ctx))).toBe('Submit record rec-1');
+  });
+
+  it('turns down a call that names neither a record nor a document, and a day with two records', async () => {
+    const { connector } = standInDcrs({ 'GET /api/v1/records': () => day([LIST_ITEM, { ...LIST_ITEM, recordId: 'rec-2' }]) });
+    const read = actionOf(connector.actions, 'get_record');
+    await expect(read.describe({}, ctx)).rejects.toMatchObject({ kind: 'invalid_request', message: 'Say which record: its recordId, or its documentId with the date.' });
+    await expect(read.run(ctx, {})).rejects.toMatchObject({ kind: 'invalid_request' });
+    await expect(read.describe({ documentId: 'F-QC-15-A' }, ctx)).rejects.toMatchObject({
+      kind: 'conflict',
+      message: `${LABEL} has 2 records for that day: rec-1, rec-2. Say which one, by its recordId.`,
+    });
+  });
+
+  it("passes DCRS's own answer on when a name fits several documents, with the documents it could mean", async () => {
+    const { connector } = standInDcrs({
+      'GET /api/v1/records': () =>
+        refusal(400, 'ambiguous', 'Several documents answer "line clearance" — say which one, by its id or its format number.', {
+          candidates: [DOC_BRIEF, { id: 'qc-line-clearance-slitting', formatNo: 'F/QC/15-G', name: 'Area Line Clearance – Slitting' }],
+        }),
+    });
+    const read = actionOf(connector.actions, 'get_record');
+    await expect(read.describe({ documentId: 'line clearance' }, ctx)).rejects.toMatchObject({
+      kind: 'invalid_request',
+      message:
+        'Several documents answer "line clearance" — say which one, by its id or its format number. They are: F/QC/15-A Area Line Clearance – Printing (qc-line-clearance-printing); F/QC/15-G Area Line Clearance – Slitting (qc-line-clearance-slitting).',
+    });
+  });
 });

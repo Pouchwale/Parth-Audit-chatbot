@@ -11,7 +11,7 @@ export function documentActions(dcrs: DcrsClient) {
     defineAction({
       name: 'find_documents',
       description:
-        "Finds the person's documents (formats) by words, format number (F/HR/17) or module: id, formatNo, name, schedule, department. No q: all of them. Also names matches kept to other departments, and formats not in DCRS yet.",
+        'Finds documents (formats) by words, format number or module; no q lists all. Also names matches kept by other departments, and formats not in DCRS yet.',
       kind: 'read',
       input: z.object({ q: searchWords.optional(), limit: limit(50) }),
       describe: (input) => (input.q ? `Find the documents matching "${input.q}"` : 'List your documents'),
@@ -22,7 +22,7 @@ export function documentActions(dcrs: DcrsClient) {
     }),
     defineAction({
       name: 'get_document',
-      description: 'One document: what it is for, who fills it in, when (its schedule), its fields and its format details.',
+      description: 'One document: what it is for, who fills it in, when, its fields and format details.',
       kind: 'read',
       input: z.object({ documentId }),
       describe: (input) => `Read document ${input.documentId}`,
@@ -42,7 +42,7 @@ export function documentActions(dcrs: DcrsClient) {
     defineAction({
       name: 'history_figures',
       description:
-        "Figures from past records for a question about history (trend, most or least, counts, on time). Pass the person's question; answer from the evidence it returns.",
+        'Figures from past records for a question about history (trends, most or least, counts, on time): pass the question, answer from the evidence.',
       kind: 'read',
       input: z.object({ question: text(600), documentId: documentId.optional(), from: isoDate.optional(), to: isoDate.optional() }),
       describe: (input) => `Work out the figures for "${input.question}"`,

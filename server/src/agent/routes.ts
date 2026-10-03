@@ -1,22 +1,32 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { AssistantReply, Capabilities, DecisionRequest, MessageRequest, RetryRequest } from '@shared/api.ts';
+import type { AssistantReply, Capabilities, DecisionRequest, EditMessageRequest, MessageRequest, RetryRequest } from '@shared/api.ts';
 import type { AppDeps } from '../app.ts';
 import { authOf, endSession, requireSession } from '../auth/sessions.ts';
 import { MAX_ATTACHMENTS } from '../files/attachments.ts';
 import { errorResponse, parseBody } from '../http.ts';
 import { eventStream } from '../sse.ts';
-import { decide, retry, sendMessage, signInExpired, type Turn, type TurnResult, type TurnStream } from './agent.ts';
+import { decide, editMessage, retry, sendMessage, signInExpired, type Turn, type TurnResult, type TurnStream } from './agent.ts';
 
 const TURNS_PER_MINUTE = 20;
 
+const Text = z.string().trim().min(1).max(4000);
+const Attachments = z.array(z.uuid()).max(MAX_ATTACHMENTS, `A message can carry at most ${MAX_ATTACHMENTS} files.`);
+
 const MessageBody = z.object({
   conversationId: z.uuid().optional(),
-  text: z.string().trim().min(1).max(4000),
+  text: Text,
   timeZone: z.string().max(100).optional(),
   stream: z.boolean().optional(),
-  attachments: z.array(z.uuid()).max(MAX_ATTACHMENTS, `A message can carry at most ${MAX_ATTACHMENTS} files.`).optional(),
+  attachments: Attachments.optional(),
 }) satisfies z.ZodType<MessageRequest>;
+
+const EditBody = z.object({
+  text: Text,
+  timeZone: z.string().max(100).optional(),
+  stream: z.boolean().optional(),
+  attachments: Attachments.optional(),
+}) satisfies z.ZodType<EditMessageRequest>;
 
 const DecisionBody = z.object({
   confirmationId: z.uuid(),
@@ -31,6 +41,7 @@ const RetryBody = z.object({
 }) satisfies z.ZodType<RetryRequest>;
 
 export const ConversationParams = z.object({ conversationId: z.uuid() });
+const MessageParams = z.object({ conversationId: z.uuid(), messageId: z.uuid() });
 
 export function registerAssistantRoutes(app: FastifyInstance, deps: AppDeps) {
   const session = requireSession(deps);
@@ -47,6 +58,12 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: AppDeps) {
   app.post('/assistant/messages', runsTurn, async (request, reply) => {
     const body = parseBody(MessageBody, request.body);
     return answer(deps, request, reply, body, (turn) => sendMessage(turn, body.conversationId, body.text, body.attachments));
+  });
+
+  app.post('/assistant/conversations/:conversationId/messages/:messageId/edit', runsTurn, async (request, reply) => {
+    const { conversationId, messageId } = parseBody(MessageParams, request.params);
+    const body = parseBody(EditBody, request.body);
+    return answer(deps, request, reply, body, (turn) => editMessage(turn, conversationId, messageId, body.text, body.attachments));
   });
 
   app.post('/assistant/conversations/:conversationId/decision', runsTurn, async (request, reply) => {

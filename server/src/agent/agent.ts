@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type Groq from 'groq-sdk';
@@ -17,7 +18,7 @@ import type {
 import type { AppDeps } from '../app.ts';
 import { loadCredentials } from '../auth/sessions.ts';
 import type { Registry, ToolBinding } from '../connectors/registry.ts';
-import { ConnectorError, splitResult, type ActionFile, type DescribeContext } from '../connectors/types.ts';
+import { ConnectorError, splitResult, type ActionFile, type ConversationFiles, type Described } from '../connectors/types.ts';
 import { one, type Db } from '../db/index.ts';
 import { actions, conversations, messageEvents, type PendingCall, type PendingConfirmation } from '../db/schema.ts';
 import { attachedFiles, attachFiles, historyMessage, modelMessages } from '../files/attachments.ts';
@@ -26,8 +27,8 @@ import { baseName } from '../files/names.ts';
 import { conversationFiles, fileInfo, storeFile } from '../files/store.ts';
 import { errorResponse, HttpError } from '../http.ts';
 import { openConversation, openInterrupted, type WorkingConversation } from './conversation.ts';
-import { explainGroqError, isRequestTooLarge, type ModelRequest, type Tool, type ToolMessage } from './model.ts';
-import { systemPrompt } from './prompt.ts';
+import { explainGroqError, isRequestTooLarge, TURN_WAIT_MS, type ModelRequest, type Tool, type ToolMessage, type WaitBudget } from './model.ts';
+import { CHANGE_MARK, systemPrompt, turnContext } from './prompt.ts';
 import { titleFor } from './titles.ts';
 import {
   confirmationPart,
@@ -40,9 +41,14 @@ import {
   setMessageStatus,
   type MessageWriter,
 } from './transcript.ts';
+import { windowOf } from './window.ts';
 
 const MAX_MODEL_CALLS = 8;
 const MAX_RESULT_CHARS = 60_000;
+/** How many of one response's lookups run at the same time. The rest wait their turn. */
+const LOOKUPS_AT_ONCE = 4;
+
+type ToolCall = Groq.Chat.ChatCompletionMessageToolCall;
 
 /** One request from a signed-in person. */
 export interface Turn {
@@ -55,12 +61,20 @@ export interface Turn {
   timeZone: string | undefined;
   /** Set when the client asked for the reply as a stream of events. */
   stream?: TurnStream | undefined;
+  /** What the request cost the server so far, for its log line. Set once it holds its conversation. */
+  stats?: TurnStats | undefined;
 }
 
 export interface TurnStream {
   send(event: StreamEvent): void;
   /** Aborts when the person stops the reply. */
   readonly signal: AbortSignal;
+}
+
+/** Counts for the log line one request writes when it ends: never anybody's words. */
+export interface TurnStats {
+  modelCalls: number;
+  connectorCalls: number;
 }
 
 export interface TurnResult extends AssistantReply {
@@ -76,9 +90,11 @@ interface Outcome {
 
 /** What a request does once it holds the conversation. */
 interface Plan {
+  /** What kind of request it is, for the log. */
+  kind: 'message' | 'decision' | 'retry' | 'edit';
   /** The assistant message the request writes: a new one, or the one it continues. */
   message: AssistantMessage;
-  /** The person's new message, when the request adds one. */
+  /** The person's message, when the request adds or changes one. */
   userMessage: UserMessage | null;
   work(reply: MessageWriter): Promise<Outcome>;
 }
@@ -101,22 +117,71 @@ export async function sendMessage(
     conv.transcript.push(userMessage, message);
     conv.messages.push(historyMessage(text, attached));
     return {
+      kind: 'message',
       message,
       userMessage,
       work: async (reply) => {
-        await turn.deps.db.insert(messageEvents).values({
-          userId: turn.userId,
-          sessionId: turn.sessionId,
-          conversationId: conv.id,
-          chars: text.length,
-          attachments: attached.length,
-        });
+        await countMessage(turn, conv.id, text, attached.length);
         const naming = conversationId ? undefined : nameConversation(turn, conv, text);
         try {
           return await runModel(turn, conv, reply, text);
         } finally {
           await naming;
         }
+      },
+    };
+  });
+}
+
+/**
+ * Changes the words of a message the person sent, and answers it again. Everything after it leaves the conversation:
+ * the replies, the later messages, their lookups, files and confirmation cards. A confirmation still waiting is
+ * cancelled first, so it can never be confirmed afterwards. The message keeps its id and files (unless `attachmentIds`
+ * says otherwise) and gets the new words; then the turn runs exactly as a new message does.
+ *
+ * What was already done stays done: the action log, the download records and the weekly reports keep every action
+ * with the words that asked for it at the time, and a change made in a connected system is not undone.
+ */
+export async function editMessage(
+  turn: Turn,
+  conversationId: string,
+  messageId: string,
+  text: string,
+  attachmentIds: readonly string[] | undefined,
+): Promise<TurnResult> {
+  return withConversation(turn, conversationId, async (conv) => {
+    const index = conv.transcript.findIndex((m) => m.role === 'user' && m.id === messageId);
+    const edited = conv.transcript[index];
+    if (index === -1 || edited?.role !== 'user') throw new HttpError(404, 'message_not_found', 'That message is no longer in this conversation.');
+    // The person's messages come in the same order in what they see and in what the model is sent.
+    const ordinal = conv.transcript.slice(0, index).filter((m) => m.role === 'user').length;
+    const historyIndex = conv.messages.flatMap((m, i) => (m.role === 'user' ? [i] : []))[ordinal];
+    if (historyIndex === undefined) throw new HttpError(409, 'message_not_editable', "This message can't be changed. Send a new one instead.");
+    const history = conv.messages[historyIndex]!;
+
+    // First: it can turn the request down, and changes nothing unless it succeeds.
+    const attached = attachmentIds === undefined ? undefined : await attachFiles(turn.deps, turn.log, turn.userId, conv.id, attachmentIds);
+    await recoverInterrupted(turn.deps.db, conv);
+    // A confirmation waiting after this message can never be answered now: the log says why.
+    if (conv.pending) await dropPending(turn, conv, conv.pending, 'edited');
+    conv.transcript.splice(index + 1);
+    conv.messages.splice(historyIndex + 1);
+
+    edited.text = text;
+    edited.editedAt = new Date().toISOString();
+    if (attached !== undefined) edited.attachments = attached.map((file) => fileInfo(file, turn.deps.registry));
+    const keptFiles = history.role === 'user' && 'attachments' in history && Array.isArray(history.attachments) ? history.attachments : [];
+    const fileIds = attached === undefined ? keptFiles : attached.map((file) => file.id);
+    conv.messages[historyIndex] = fileIds.length > 0 ? { role: 'user', content: text, attachments: fileIds } : { role: 'user', content: text };
+    const message = newAssistantMessage();
+    conv.transcript.push(message);
+    return {
+      kind: 'edit',
+      message,
+      userMessage: edited,
+      work: async (reply) => {
+        await countMessage(turn, conv.id, text, fileIds.length);
+        return runModel(turn, conv, reply, text);
       },
     };
   });
@@ -138,6 +203,7 @@ export async function decide(
     if (!pending || !shown) throw new HttpError(409, 'confirmation_not_pending', 'That change was already handled.');
 
     return {
+      kind: 'decision',
       message: shown.message,
       userMessage: null,
       work: async (reply) => {
@@ -174,7 +240,7 @@ export async function retry(turn: Turn, conversationId: string): Promise<TurnRes
       conv.messages.pop();
       if (message.parts.at(-1)?.type === 'text') message.parts.pop();
     }
-    return { message, userMessage: null, work: (reply) => runModel(turn, conv, reply, request.text) };
+    return { kind: 'retry', message, userMessage: null, work: (reply) => runModel(turn, conv, reply, request.text) };
   });
 }
 
@@ -195,6 +261,11 @@ export async function recoverAfterRestart(db: Db): Promise<number> {
 /** The connected system stopped accepting the person's sign-in. */
 export function signInExpired(registry: Registry): HttpError {
   return new HttpError(401, 'session_expired', `Your ${registry.signIn.name} sign-in has expired. Sign in again.`);
+}
+
+/** One row per message a person sent that the assistant took on, without its text: the weekly reports count these. */
+async function countMessage(turn: Turn, conversationId: string, text: string, attachments: number) {
+  await turn.deps.db.insert(messageEvents).values({ userId: turn.userId, sessionId: turn.sessionId, conversationId, chars: text.length, attachments });
 }
 
 async function confirm(
@@ -218,6 +289,7 @@ async function confirm(
   const results = [...pending.results];
   const outcomes: string[] = [];
   let stop: 'failed' | 'signed_out' | null = null;
+  // In the order they were proposed, and no further than the first that fails: a later step often needs an earlier one.
   for (const call of pending.calls) {
     if (stop) {
       const reason = 'Not done, because an earlier change in this request failed.';
@@ -251,21 +323,20 @@ async function confirm(
 
 async function runModel(turn: Turn, conv: WorkingConversation, reply: MessageWriter, request: string): Promise<Outcome> {
   const { deps } = turn;
-  const system = systemPrompt({
-    displayName: turn.displayName,
-    username: turn.username,
-    connectors: deps.registry.connectors,
-    now: new Date(),
-    timeZone: turn.timeZone,
-  });
+  // The same bytes for every person and every turn, so Groq can reuse its work on them: see prompt.ts.
+  const system = systemPrompt(deps.registry.connectors);
   const tools = toolDefinitions(deps.registry);
-  const context: DescribeContext = { files: conversationFiles(deps, turn.userId, conv.id) };
   const attached = await attachedFiles(deps.db, turn.userId, conv.id, conv.messages);
+  const files = conversationFiles(deps, turn.userId, conv.id);
+  // All the waiting for a busy model that this turn may do, across its model calls.
+  const wait: WaitBudget = { leftMs: TURN_WAIT_MS };
 
   for (let calls = 0; calls < MAX_MODEL_CALLS; calls++) {
     reply.beginResponse();
-    const messages = modelMessages(conv.messages, attached, deps.config.fileTextChars);
-    const completion = await callModel(turn, { system, tools, messages }, reply);
+    const { messages: history, trimmed } = windowOf(conv.messages, deps.config.historyChars);
+    const context = turnContext({ displayName: turn.displayName, username: turn.username, now: new Date(), timeZone: turn.timeZone, trimmed });
+    const messages = modelMessages(history, attached, deps.config.fileTextChars);
+    const completion = await callModel(turn, { system, context, tools, messages }, reply, wait);
     if (!completion) return stopped(conv, reply);
     const choice = completion.choices[0];
     if (!choice || choice.finish_reason === 'length') {
@@ -286,65 +357,14 @@ async function runModel(turn: Turn, conv: WorkingConversation, reply: MessageWri
     const text = content?.trim() ?? '';
     if (toolCalls.length === 0) return { reply: text, confirmation: null };
 
-    const results: ToolMessage[] = [];
-    const proposed: PendingCall[] = [];
-    let signedOut = false;
-    for (const call of toolCalls) {
-      const binding = deps.registry.find(call.function.name);
-      if (!binding) {
-        results.push(toolError(call.id, `There is no tool called ${call.function.name}.`));
-        continue;
-      }
-      let args: unknown;
-      try {
-        args = JSON.parse(call.function.arguments || '{}');
-      } catch {
-        results.push(toolError(call.id, 'The arguments were not valid JSON.'));
-        continue;
-      }
-      const parsed = binding.action.input.safeParse(args);
-      if (!parsed.success) {
-        results.push(toolError(call.id, `Invalid input:\n${z.prettifyError(parsed.error)}`));
-        continue;
-      }
-      if (signedOut) {
-        results.push(toolError(call.id, SIGNED_OUT));
-        continue;
-      }
-      const summary = await describe(binding, parsed.data, context);
-      if (summary instanceof ConnectorError) {
-        results.push(toolError(call.id, summary.message));
-        continue;
-      }
-      if (binding.action.kind === 'write') {
-        const actionId = await logAction(turn, conv.id, binding, parsed.data, summary, 'awaiting_confirmation', request);
-        proposed.push({ toolCallId: call.id, toolName: binding.toolName, input: parsed.data, actionId, system: binding.connector.name, summary });
-        continue;
-      }
-      const actionId = await logAction(turn, conv.id, binding, parsed.data, summary, 'running', request);
-      const activity: ActivityPart = {
-        type: 'activity',
-        id: actionId,
-        system: binding.connector.name,
-        summary,
-        kind: binding.action.kind,
-        status: 'running',
-        error: null,
-      };
-      reply.put(activity);
-      const run = await execute(turn, conv.id, binding.toolName, parsed.data, call.id, actionId);
-      reply.put({ ...activity, status: run.ok ? 'succeeded' : 'failed', error: run.error ?? null });
-      for (const file of run.files) reply.put({ type: 'file', file });
-      results.push(run.result);
-      signedOut ||= run.signedOut;
-    }
-
+    const { results, proposed, signedOut } = await runToolCalls(turn, conv.id, toolCalls, files, request, reply);
     if (signedOut) {
       for (const call of proposed) results.push(await skip(turn, call, SIGNED_OUT));
       conv.messages.push(...results);
       return { reply: '', confirmation: null, signedOut: true };
     }
     if (proposed.length > 0) {
+      // Every change the response asked for goes on one card, in order, for one answer.
       const expiresAt = new Date(Date.now() + deps.config.confirmationTtlMs).toISOString();
       conv.pending = { id: randomUUID(), expiresAt, request, results, calls: proposed };
       reply.put(confirmationPart(conv.pending));
@@ -360,12 +380,127 @@ async function runModel(turn: Turn, conv: WorkingConversation, reply: MessageWri
 
 const SIGNED_OUT = 'Not run: the sign-in to the connected system has expired.';
 
+/** One tool call of a model response, as it is checked, described, and then run or proposed. */
+interface Planned {
+  call: ToolCall;
+  binding?: ToolBinding;
+  input?: unknown;
+  summary?: string;
+  /** Its answer for the model, once there is one. A change proposed for confirmation gets its answer when that is decided. */
+  result?: ToolMessage;
+}
+
+/**
+ * Runs the lookups a response asked for, together, and lines up its changes for one confirmation. Every call is
+ * checked against the connector's list and schema first, and described by the connector, which may ask its system
+ * what the call names. The answers come back in the order the calls were made.
+ */
+async function runToolCalls(
+  turn: Turn,
+  conversationId: string,
+  toolCalls: readonly ToolCall[],
+  files: ConversationFiles,
+  request: string,
+  reply: MessageWriter,
+): Promise<{ results: ToolMessage[]; proposed: PendingCall[]; signedOut: boolean }> {
+  const { deps } = turn;
+  const planned: Planned[] = toolCalls.map((call) => check(deps.registry, call));
+  let signedOut = false;
+
+  // Each call's sentence, from the connector, with the input as the connector resolved it.
+  const credentials = new Map<string, Promise<unknown>>();
+  const credentialsOf = (connectorId: string) => {
+    let loading = credentials.get(connectorId);
+    if (!loading) {
+      loading = loadCredentials(deps, turn.sessionId, connectorId);
+      credentials.set(connectorId, loading);
+    }
+    return loading;
+  };
+  await inTurns(planned, LOOKUPS_AT_ONCE, async (item) => {
+    if (!item.binding || item.result) return;
+    const described = await describe(turn, item.binding, item.input, { credentials: await credentialsOf(item.binding.connector.id), files });
+    if (described instanceof ConnectorError) {
+      item.result = toolError(item.call.id, described.message);
+      if (described.kind === 'unauthorized' && item.binding.connector.id === deps.registry.signIn.id) signedOut = true;
+      return;
+    }
+    item.summary = described.summary;
+    item.input = described.input;
+  });
+
+  const proposed: PendingCall[] = [];
+  const lookups: Planned[] = [];
+  for (const item of planned) {
+    if (item.result || !item.binding) continue;
+    if (signedOut) {
+      item.result = toolError(item.call.id, SIGNED_OUT);
+      continue;
+    }
+    const { binding, input, summary = binding.action.name } = item;
+    if (binding.action.kind === 'write') {
+      const actionId = await logAction(turn, conversationId, binding, input, summary, 'awaiting_confirmation', request);
+      proposed.push({ toolCallId: item.call.id, toolName: binding.toolName, input, actionId, system: binding.connector.name, summary });
+      continue;
+    }
+    lookups.push(item);
+  }
+
+  // The lookups run together, a few at a time, each shown in the reply as it runs.
+  await inTurns(lookups, LOOKUPS_AT_ONCE, async (item) => {
+    const binding = item.binding!;
+    const summary = item.summary ?? binding.action.name;
+    if (signedOut) {
+      item.result = toolError(item.call.id, SIGNED_OUT);
+      return;
+    }
+    const actionId = await logAction(turn, conversationId, binding, item.input, summary, 'running', request);
+    const activity: ActivityPart = { type: 'activity', id: actionId, system: binding.connector.name, summary, kind: 'read', status: 'running', error: null };
+    reply.put(activity);
+    const run = await execute(turn, conversationId, binding.toolName, item.input, item.call.id, actionId);
+    reply.put({ ...activity, status: run.ok ? 'succeeded' : 'failed', error: run.error ?? null });
+    for (const file of run.files) reply.put({ type: 'file', file });
+    item.result = run.result;
+    signedOut ||= run.signedOut;
+  });
+
+  return { results: planned.flatMap((item) => (item.result ? [item.result] : [])), proposed, signedOut };
+}
+
+/** A call as the model made it, checked against the connector list and the action's schema. */
+function check(registry: Registry, call: ToolCall): Planned {
+  const binding = registry.find(call.function.name);
+  if (!binding) return { call, result: toolError(call.id, `There is no tool called ${call.function.name}.`) };
+  let args: unknown;
+  try {
+    args = JSON.parse(call.function.arguments || '{}');
+  } catch {
+    return { call, result: toolError(call.id, 'The arguments were not valid JSON.') };
+  }
+  const parsed = binding.action.input.safeParse(args);
+  if (!parsed.success) return { call, result: toolError(call.id, `Invalid input:\n${z.prettifyError(parsed.error)}`) };
+  return { call, binding, input: parsed.data };
+}
+
+/** Runs `work` on every item, at most `limit` at a time, starting them in order. */
+async function inTurns<T>(items: readonly T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await work(items[next++]!);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
 /** Calls the model, writing its text into the reply as it streams. Returns nothing when the person stopped the reply. */
-async function callModel(turn: Turn, request: ModelRequest, reply: MessageWriter): Promise<Groq.Chat.ChatCompletion | undefined> {
+async function callModel(turn: Turn, request: ModelRequest, reply: MessageWriter, wait: WaitBudget): Promise<Groq.Chat.ChatCompletion | undefined> {
   const signal = turn.stream?.signal;
   if (signal?.aborted) return undefined;
+  if (turn.stats) turn.stats.modelCalls++;
+  // While the model is busy, the person is told how long the wait is, and when it is over.
+  const onWait = (retryInMs: number | null) =>
+    turn.stream?.send(retryInMs === null ? { type: 'status', status: null } : { type: 'status', status: 'waiting_for_model', retryInMs });
   try {
-    const completion = await turn.deps.model(request, { signal, onText: reply.text });
+    const completion = await turn.deps.model(request, { signal, onText: reply.text, onWait, wait, log: turn.log });
     return signal?.aborted ? undefined : completion;
   } catch (error) {
     if (signal?.aborted) return undefined;
@@ -426,6 +561,7 @@ async function execute(
   }
 
   await deps.db.update(actions).set({ status: 'running' }).where(eq(actions.id, actionId));
+  if (turn.stats) turn.stats.connectorCalls++;
   let output: unknown;
   try {
     const credentials = await loadCredentials(deps, turn.sessionId, binding.connector.id);
@@ -521,6 +657,7 @@ const DROPPED = {
   cancelled: 'The person cancelled this change, so it was not made.',
   expired: NOT_CONFIRMED_IN_TIME,
   superseded: 'The person moved on without confirming, so this change was not made.',
+  edited: 'The person changed their message, so this change was not made.',
 };
 
 /** Drops the changes waiting for confirmation: nothing runs, and both the model and the card show why. */
@@ -598,6 +735,9 @@ async function withConversation(
   conversationId: string | undefined,
   plan: (conv: WorkingConversation) => Promise<Plan>,
 ): Promise<TurnResult> {
+  const started = performance.now();
+  const stats: TurnStats = turn.stats ?? { modelCalls: 0, connectorCalls: 0 };
+  turn.stats = stats;
   const conv = await openConversation(turn.deps.db, turn, conversationId);
   let prepared: Plan;
   try {
@@ -607,7 +747,10 @@ async function withConversation(
     await (conversationId ? conv.release() : conv.discard());
     throw error;
   }
-  const { message, userMessage, work } = prepared;
+  const { kind, message, userMessage, work } = prepared;
+  // One line per request: what kind, what it cost the server, and how it ended. Names and numbers only.
+  const logTurn = (status: string) =>
+    turn.log.info({ turn: kind, conversationId: conv.id, ...stats, ms: Math.round(performance.now() - started), status }, 'turn');
 
   let outcome: Outcome;
   try {
@@ -622,12 +765,14 @@ async function withConversation(
     const last = conv.messages.at(-1);
     if (!conv.pending && last?.role === 'assistant' && last.tool_calls?.length) conv.messages.pop();
     await conv.save({ unlock: true });
+    logTurn(errorResponse(error).body.error);
     throw error;
   }
 
   if (outcome.signedOut) setMessageStatus(message, 'error', signInExpired(turn.deps.registry).message);
   else if (message.status === 'streaming') setMessageStatus(message, 'complete');
   await conv.save({ unlock: true });
+  logTurn(message.status);
   return {
     conversationId: conv.id,
     reply: outcome.reply,
@@ -640,7 +785,10 @@ async function withConversation(
 
 const toolCache = new WeakMap<Registry, Tool[]>();
 
-/** Function definitions for the model: exactly the actions on the connector list, nothing else. */
+/**
+ * Function definitions for the model: exactly the actions on the connector list, nothing else, always in the same
+ * order and the same words, so the request's start is the same for every person and every turn (see prompt.ts).
+ */
 export function toolDefinitions(registry: Registry): Tool[] {
   let tools = toolCache.get(registry);
   if (!tools) {
@@ -650,8 +798,7 @@ export function toolDefinitions(registry: Registry): Tool[] {
         type: 'function',
         function: {
           name: toolName,
-          description:
-            action.kind === 'write' ? `${action.description} This changes data, so the person confirms it before it runs.` : action.description,
+          description: action.kind === 'write' ? `${CHANGE_MARK} ${action.description}` : action.description,
           parameters,
         },
       };
@@ -661,12 +808,24 @@ export function toolDefinitions(registry: Registry): Tool[] {
   return tools;
 }
 
-/** The sentence shown for a call, or the ConnectorError the action turned the call down with. */
-async function describe(binding: ToolBinding, input: unknown, context: DescribeContext): Promise<string | ConnectorError> {
+/**
+ * The sentence shown for a call, with the input as the connector resolved it, or the ConnectorError the action
+ * turned the call down with.
+ */
+async function describe(
+  turn: Turn,
+  binding: ToolBinding,
+  input: unknown,
+  context: { credentials: unknown; files: ConversationFiles },
+): Promise<Described<unknown> | ConnectorError> {
   try {
-    return (await binding.action.describe(input, context)).trim() || binding.action.name;
+    const said = await binding.action.describe(input, context);
+    const { summary, input: resolved } = typeof said === 'string' ? { summary: said, input } : said;
+    return { summary: summary.trim() || binding.action.name, input: resolved };
   } catch (error) {
-    return error instanceof ConnectorError ? error : `${binding.connector.name}: ${binding.action.name}`;
+    if (error instanceof ConnectorError) return error;
+    turn.log.error({ err: error, tool: binding.toolName }, 'describing a call failed unexpectedly');
+    return { summary: `${binding.connector.name}: ${binding.action.name}`, input };
   }
 }
 

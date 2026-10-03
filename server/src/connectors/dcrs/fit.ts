@@ -4,15 +4,15 @@
 
 /**
  * How much of an answer the model is given, in characters of JSON (about four make a token). Every answer stays in the
- * conversation and is sent again with each later request, and the key allows 8,000 tokens a minute in all.
+ * conversation and is sent again with each later request of the turn, and the key allows 8,000 tokens a minute in all.
  */
 export const BUDGET = {
   /** A list: documents, records, findings, search hits. */
-  list: 3_000,
+  list: 2_400,
   /** One thing in full: a record with its fields, a document with its fields. */
-  one: 4_500,
+  one: 3_200,
   /** What a change did. */
-  change: 2_000,
+  change: 1_600,
 } as const;
 
 /** The DCRS web app's own page routes: nothing a phone can open, so they are left out. */
@@ -37,6 +37,8 @@ const MAX_DEPTH = 8;
 function size(value: unknown): number {
   return JSON.stringify(value ?? null).length;
 }
+
+const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 
 function shrink(value: unknown, items: number, chars: number, depth: number): unknown {
   if (typeof value === 'string') return value.length > chars ? `${value.slice(0, chars)}…` : value;
@@ -81,5 +83,23 @@ export function without(value: unknown, keys: ReadonlySet<string>): unknown {
         .map(([key, item]) => [key, without(item, keys)]),
     );
   }
+  return value;
+}
+
+/**
+ * A list of like things as a table: the keys once, then each thing's values in that order, with null where it has
+ * none. A list written out as objects repeats every key for every item, which is most of what it costs the model.
+ * A list of fewer than two things, or of anything but objects, stays as it is.
+ */
+export function table(items: readonly unknown[]): unknown {
+  if (items.length < 2 || !items.every(isObject)) return items;
+  const columns = [...new Set(items.flatMap((item) => Object.keys(item)))];
+  return { columns, rows: items.map((item) => columns.map((key) => item[key] ?? null)) };
+}
+
+/** A copy with every list of like things in it, at any depth, written as a table. */
+export function tables(value: unknown): unknown {
+  if (Array.isArray(value)) return table(value.map(tables));
+  if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, tables(item)]));
   return value;
 }

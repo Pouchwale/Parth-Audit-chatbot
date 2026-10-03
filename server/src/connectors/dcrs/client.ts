@@ -50,6 +50,8 @@ interface Refusal {
   code?: unknown;
   problems?: unknown;
   errors?: unknown;
+  /** With the code "ambiguous": the documents the words could mean. */
+  candidates?: unknown;
 }
 
 interface LoginAnswer {
@@ -201,6 +203,24 @@ function problemWords(problem: unknown): string | undefined {
   return undefined;
 }
 
+/** A document as its format number and name, or its name alone while its number is still to be confirmed. */
+export function documentLabel(doc: { formatNo?: unknown; name?: unknown; id?: unknown }): string {
+  const number = wordsOf(doc.formatNo);
+  const name = wordsOf(doc.name) ?? wordsOf(doc.id) ?? 'a document';
+  return number && !/^to be /i.test(number) ? `${number} ${name}` : name;
+}
+
+/** The documents an unclear name could mean, for the assistant to offer the person: "F/QC/15-A Name (id)". */
+function candidateWords(candidates: unknown): string[] {
+  if (!Array.isArray(candidates)) return [];
+  return candidates.slice(0, 8).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== 'object') return [];
+    const doc = candidate as { id?: unknown; formatNo?: unknown; name?: unknown };
+    const id = wordsOf(doc.id);
+    return [`${documentLabel(doc)}${id ? ` (${id})` : ''}`];
+  });
+}
+
 /** DCRS's refusal as the connector error the assistant shows, in DCRS's own words where it gave some. */
 export async function refusalOf(response: Response): Promise<ConnectorError> {
   const body = (await readJson(response)) as Refusal | undefined;
@@ -216,8 +236,12 @@ export async function refusalOf(response: Response): Promise<ConnectorError> {
   switch (response.status) {
     case 400:
     case 415:
-    case 422:
+    case 422: {
+      // A name that fits several documents: DCRS lists them, so the assistant can ask the person which one.
+      const which = code === 'ambiguous' ? candidateWords(body?.candidates) : [];
+      if (which.length > 0) return new ConnectorError('invalid_request', `${said ?? 'Several documents fit that name.'} They are: ${which.join('; ')}.`);
       return new ConnectorError('invalid_request', withProblems(said ?? 'DCRS turned the request down.'));
+    }
     case 401:
       return new ConnectorError('unauthorized', SIGNED_OUT);
     case 403:

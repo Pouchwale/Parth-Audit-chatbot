@@ -46,9 +46,12 @@ export interface Action<Input = any> {
   /**
    * One plain sentence saying exactly what this call does, e.g. "Close finding F-102 as resolved".
    * Shown on the confirmation card and in the admin action log, so it must come from the input, not the model.
-   * Throwing a ConnectorError, such as for a file that isn't in the conversation, turns the call down.
+   * It may ask the system what the input names, such as the document behind a format number, and answer the
+   * sentence with the input as resolved: that input is then what is logged, confirmed and run.
+   * Throwing a ConnectorError, such as for a file that isn't in the conversation or a name that fits several
+   * documents, turns the call down, and the assistant is told why.
    */
-  describe(input: Input, ctx: DescribeContext): string | Promise<string>;
+  describe(input: Input, ctx: DescribeContext): string | Described<Input> | Promise<string | Described<Input>>;
   /**
    * Calls the system. The result goes back to the assistant as JSON, so keep it small and relevant. To hand the
    * person files, such as a report, return withFiles(result, files).
@@ -62,7 +65,14 @@ export interface ActionContext {
   files: ConversationFiles;
 }
 
-export type DescribeContext = Pick<ActionContext, 'files'>;
+/** What describe() has to work with: the same as run(), since naming a call exactly can mean asking the system. */
+export type DescribeContext = ActionContext;
+
+/** A call's sentence, with its input as the action resolved it (a document's id in place of its number, say). */
+export interface Described<Input> {
+  summary: string;
+  input: Input;
+}
 
 /** The files in the conversation the action runs in: ones the person attached, and ones systems returned. */
 export interface ConversationFiles {

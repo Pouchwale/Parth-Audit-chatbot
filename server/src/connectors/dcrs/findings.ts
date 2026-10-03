@@ -38,7 +38,7 @@ export function findingActions(dcrs: DcrsClient) {
     }),
     defineAction({
       name: 'close_finding',
-      description: 'Closes an open CAPA finding with a note of how it was resolved. id: its ref from list_findings, else its id.',
+      description: 'Closes an open CAPA finding with a note saying how it was resolved. id: its ref (from list_findings) or id.',
       kind: 'write',
       input: z.object({ id: findingId, note: text(1000) }),
       describe: (input) => `Close CAPA finding ${input.id} with the note: ${spoken(input.note, 300)}`,
@@ -76,7 +76,7 @@ export function findingActions(dcrs: DcrsClient) {
     }),
     defineAction({
       name: 'get_pest_control_report_summary',
-      description: 'The daily pest control record (F/HR/17) of a date as data: check points, rodents caught, observations, who checked and verified it.',
+      description: 'The daily pest control record (F/HR/17) of a date as data: check points, rodents, observations, who checked and verified.',
       kind: 'read',
       input: z.object({ date: isoDate }),
       describe: (input) => `Read the daily pest control report for ${input.date}`,

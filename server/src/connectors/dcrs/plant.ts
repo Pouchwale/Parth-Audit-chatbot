@@ -17,7 +17,7 @@ export function plantActions(dcrs: DcrsClient) {
     defineAction({
       name: 'equipment_lookup',
       description:
-        "Machines on the equipment list (F/MNT/01, Maintenance only) by Machine No. (M-47), serial, model, maker or place: DCRS's own reply and each machine's details.",
+        'Machines on the equipment list (F/MNT/01, Maintenance only) by Machine No. (M-47), serial, model, maker or place.',
       kind: 'read',
       input: z.object({ q: searchWords.optional() }),
       describe: (input) => (input.q ? `Look up "${input.q}" on the equipment list (F/MNT/01)` : 'Read the equipment list (F/MNT/01)'),
@@ -27,7 +27,7 @@ export function plantActions(dcrs: DcrsClient) {
     defineAction({
       name: 'insights',
       description:
-        "What stands out in the person's records (DCRS's Insights): counts by severity and the top findings with evidence. For 'any problems?' or 'what needs attention?'",
+        "What stands out in the person's records: counts by severity and the top findings with evidence. For 'any problems?' or 'what needs attention?'",
       kind: 'read',
       input: z.object({}),
       describe: () => 'Read what stands out in the records',

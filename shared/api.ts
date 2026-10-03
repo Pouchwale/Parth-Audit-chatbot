@@ -76,6 +76,36 @@ export interface FileInfo {
 
 export type FilePurpose = 'open' | 'download' | 'share';
 
+/**
+ * Changes a message the person sent, and answers it again:
+ * POST /assistant/conversations/:conversationId/messages/:messageId/edit
+ *
+ * Only in the person's own conversation, and only for a message they wrote. Everything after that message leaves
+ * the conversation: the replies, the later messages, their lookups, files and confirmation cards. A confirmation
+ * still waiting there is cancelled, so it can never be confirmed afterwards. The message keeps its id and gets the
+ * new words; then the turn runs and answers exactly as POST /assistant/messages does (one AssistantReply, or the
+ * same stream, whose start event carries the edited message as saved).
+ *
+ * What was already done is not undone: a change made in a connected system stays made, and the action log, the
+ * download records and the weekly reports keep every action with the words that asked for it at the time.
+ *
+ * Refused with 404 message_not_found (no such message of the person's in that conversation; someone else's
+ * conversation is 404 conversation_not_found, as everywhere), 409 conversation_busy (a reply in it is still being
+ * written), and 400 invalid_request (no words, or more than 4,000 characters).
+ */
+export interface EditMessageRequest {
+  text: string;
+  /** IANA time zone of the device, as in MessageRequest. */
+  timeZone?: string;
+  /** Answer with Server-Sent Events (see StreamEvent) instead of one JSON AssistantReply. */
+  stream?: boolean;
+  /**
+   * Ids of the files the edited message carries (at most 20): files it already had, or new uploads. Leave it out to
+   * keep the message's files as they are; send [] to take them all off.
+   */
+  attachments?: string[];
+}
+
 export interface DecisionRequest {
   confirmationId: string;
   decision: 'confirm' | 'cancel';
@@ -167,6 +197,8 @@ export interface UserMessage {
   /** Files the person attached. Missing on messages saved before attachments existed. */
   attachments?: FileInfo[];
   createdAt: string;
+  /** When the person last changed the words (see EditMessageRequest). Missing on a message never edited. */
+  editedAt?: string;
 }
 
 export interface AssistantMessage {
@@ -204,21 +236,28 @@ export interface RenameConversationRequest {
 }
 
 /**
- * With `stream: true`, message, decision and retry requests answer with Server-Sent Events. Each event's
+ * With `stream: true`, message, edit, decision and retry requests answer with Server-Sent Events. Each event's
  * `data:` line is one StreamEvent as JSON, and its `event:` line repeats the type. Apply them in order:
- * - start: the conversation, the new user message (null when continuing), and the assistant message
- *   being written (new, or the existing one being continued, with its current parts).
+ * - start: the conversation, the user message (the new one; for an edit, the edited one as saved, with the id it
+ *   had: everything after it has left the conversation; null when continuing), and the assistant message being
+ *   written (new, or the existing one being continued, with its current parts).
  * - delta: append text to the last part if it is a text part, otherwise append a new text part.
  * - part: set parts[index] to this part (append when index equals parts.length). Activity and
- *   confirmation parts are re-sent whenever their status changes.
+ *   confirmation parts are re-sent whenever their status changes. Several lookups can be running at once.
+ * - status: what the reply is waiting on while nothing else arrives. "waiting_for_model": the assistant's model is
+ *   busy and the server will try again in `retryInMs` milliseconds; say so, counting down, until a status event with
+ *   `status: null` arrives, which clears it (so does done or error). The reply so far is unchanged meanwhile.
  * - title: the conversation got its generated title.
  * - done: the final result; `reply.message` is authoritative and replaces the streamed copy.
- * - error: the request failed; the assistant message is saved with status "error" when it got that far.
+ * - error: the request failed; the assistant message is saved with status "error" when it got that far. Retry
+ *   continues it, also after "assistant_busy", which says when to try again.
  */
 export type StreamEvent =
   | { type: 'start'; conversationId: string; title: string | null; userMessage: UserMessage | null; message: AssistantMessage }
   | { type: 'delta'; text: string }
   | { type: 'part'; index: number; part: MessagePart }
+  | { type: 'status'; status: 'waiting_for_model'; retryInMs: number }
+  | { type: 'status'; status: null }
   | { type: 'title'; title: string }
   | { type: 'done'; reply: AssistantReply }
   | { type: 'error'; error: string; message: string };

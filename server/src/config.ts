@@ -14,11 +14,13 @@ const Env = z.object({
   GROQ_API_KEY: z.string().optional(),
   GROQ_MODEL: z.string().default('openai/gpt-oss-120b'),
   GROQ_REASONING_EFFORT: z.enum(['', 'low', 'medium', 'high']).default('medium'),
+  GROQ_FALLBACK_MODEL: z.string().optional(),
   GROQ_TITLE_MODEL: z.string().default('openai/gpt-oss-20b'),
   GROQ_TRANSCRIPTION_MODEL: z.string().default('whisper-large-v3-turbo'),
   GROQ_VISION_MODEL: z.string().default('qwen/qwen3.8-27b'),
   FILE_MAX_MB: z.coerce.number().positive().default(20),
   FILE_TEXT_CHARS: z.coerce.number().int().positive().default(16_000),
+  HISTORY_CHARS: z.coerce.number().int().positive().default(12_000),
   DCRS_BASE_URL: z.url().optional(),
   TRUST_PROXY: z.string().optional(),
   CORS_ORIGINS: z.string().default('http://localhost:8081,http://127.0.0.1:8081'),
@@ -43,6 +45,11 @@ export interface Config {
   model: string;
   /** For reasoning models such as gpt-oss. Empty sends nothing. */
   reasoningEffort: '' | 'low' | 'medium' | 'high';
+  /**
+   * Answers instead of `model` while Groq's limits keep that one busy for more than a moment. Each model has limits
+   * of its own. It is sent the same reasoning effort. Undefined: the wait is waited, and the person told.
+   */
+  fallbackModel: string | undefined;
   /** Names new conversations. */
   titleModel: string;
   /** Turns voice recordings into text. */
@@ -56,6 +63,11 @@ export interface Config {
    * conversation. About four characters make a token, and the request must fit the key's tokens-per-minute limit.
    */
   fileTextChars: number;
+  /**
+   * How much of a conversation's earlier turns the model is given with each request, in characters. Older turns are
+   * left out first, whole. The turn being answered is always given in full.
+   */
+  historyChars: number;
   dcrsBaseUrl: string | undefined;
   trustProxy: boolean | string[] | ((address: string, hop: number) => boolean);
   corsOrigins: string[];
@@ -85,11 +97,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     groqApiKey: e.GROQ_API_KEY,
     model: e.GROQ_MODEL,
     reasoningEffort: e.GROQ_REASONING_EFFORT,
+    fallbackModel: e.GROQ_FALLBACK_MODEL,
     titleModel: e.GROQ_TITLE_MODEL,
     transcriptionModel: e.GROQ_TRANSCRIPTION_MODEL,
     visionModel: e.GROQ_VISION_MODEL,
     fileMaxBytes: Math.floor(e.FILE_MAX_MB * 1024 * 1024),
     fileTextChars: e.FILE_TEXT_CHARS,
+    historyChars: e.HISTORY_CHARS,
     dcrsBaseUrl: e.DCRS_BASE_URL,
     trustProxy: parseTrustProxy(e.TRUST_PROXY),
     corsOrigins: list(e.CORS_ORIGINS),
