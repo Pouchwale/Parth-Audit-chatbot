@@ -1,14 +1,18 @@
 // On iOS and Android this is Expo's fetch, which streams response bodies; on web it is the browser's own.
 import { fetch } from 'expo/fetch';
 import { Platform } from 'react-native';
-import type { AssistantReply, DecisionRequest, FileInfo, MessageRequest, RetryRequest, StreamEvent } from '@shared/api';
+import type { AssistantReply, DecisionRequest, EditMessageRequest, FileInfo, MessageRequest, RetryRequest, StreamEvent } from '@shared/api';
 import { ApiError, conversationPath, requestFailed, serverBase, unreachable } from './api';
 import { timeZone } from './device';
 import { readSse } from './sse';
 
-/** Something the person asked for: a new message, an answer to a confirmation, or another try at a failed reply. */
+/**
+ * Something the person asked for: a new message, a change to a message they sent (answered again, with everything
+ * after it gone), an answer to a confirmation, or another try at a failed reply.
+ */
 export type ChatRequest =
   | { kind: 'message'; conversationId?: string; text: string; attachments: FileInfo[] }
+  | { kind: 'edit'; conversationId: string; messageId: string; text: string }
   | { kind: 'decision'; conversationId: string; confirmationId: string; decision: 'confirm' | 'cancel' }
   | { kind: 'retry'; conversationId: string };
 
@@ -88,7 +92,7 @@ export async function streamChat(
   return last.reply;
 }
 
-function endpoint(request: ChatRequest): { path: string; body: MessageRequest | DecisionRequest | RetryRequest } {
+function endpoint(request: ChatRequest): { path: string; body: MessageRequest | EditMessageRequest | DecisionRequest | RetryRequest } {
   const zone = timeZone();
   switch (request.kind) {
     case 'message':
@@ -101,6 +105,12 @@ function endpoint(request: ChatRequest): { path: string; body: MessageRequest | 
           stream: true,
           attachments: request.attachments.length > 0 ? request.attachments.map((file) => file.id) : undefined,
         },
+      };
+    case 'edit':
+      // No attachments: the message keeps the files it has.
+      return {
+        path: `${conversationPath(request.conversationId)}/messages/${encodeURIComponent(request.messageId)}/edit`,
+        body: { text: request.text, timeZone: zone, stream: true },
       };
     case 'decision':
       return {

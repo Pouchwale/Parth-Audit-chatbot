@@ -20,14 +20,36 @@ export function MessageActions({ id, text, reading }: { id: string; text: string
   );
 }
 
-function Action({ icon, label, onPress }: { icon: ComponentProps<typeof Ionicons>['name']; label: string; onPress(): void }) {
+// 44 points tall: the smallest touch target a fingertip hits reliably. The rows pull the box's spare height back in,
+// so the actions sit as close under a message as before.
+const ACTION_HEIGHT = 44;
+
+/** A small labelled action under a message. `off` shows it dimmed; the press still happens, so it can say why. */
+export function Action({
+  icon,
+  label,
+  accessibilityLabel,
+  accessibilityHint,
+  off = false,
+  onPress,
+}: {
+  icon: ComponentProps<typeof Ionicons>['name'];
+  label: string;
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
+  off?: boolean;
+  onPress(): void;
+}) {
   const theme = useTheme();
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={{ disabled: off }}
+      aria-disabled={off}
       onPress={onPress}
-      hitSlop={4}
-      style={({ pressed }) => [styles.action, { backgroundColor: pressed ? theme.surfaceMuted : 'transparent' }]}>
+      style={({ pressed }) => [styles.action, { backgroundColor: pressed ? theme.surfaceMuted : 'transparent', opacity: off ? 0.45 : 1 }]}>
       <Ionicons name={icon} size={16} color={theme.textSecondary} />
       <Text style={[styles.label, { color: theme.textSecondary }]}>{label}</Text>
     </Pressable>
@@ -35,7 +57,14 @@ function Action({ icon, label, onPress }: { icon: ComponentProps<typeof Ionicons
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', gap: Spacing.xs, marginLeft: -Spacing.sm },
-  action: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, minHeight: 32, paddingHorizontal: Spacing.sm, borderRadius: Radius.sm },
+  row: { flexDirection: 'row', gap: Spacing.xs, marginLeft: -Spacing.sm, marginVertical: -Spacing.xs },
+  action: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    minHeight: ACTION_HEIGHT,
+    paddingHorizontal: Spacing.sm + 2,
+    borderRadius: Radius.sm,
+  },
   label: { fontSize: 13 },
 });

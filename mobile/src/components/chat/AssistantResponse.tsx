@@ -11,6 +11,7 @@ import { InlineError } from './InlineError';
 import { Markdown } from './Markdown';
 import { MessageActions } from './MessageActions';
 import { Thinking } from './Thinking';
+import { WaitingLine } from './WaitingLine';
 
 type Decision = 'confirm' | 'cancel';
 
@@ -21,6 +22,7 @@ export function AssistantResponse({
   deciding,
   busy,
   reading,
+  waiting = null,
   onDecide,
   onRetry,
 }: {
@@ -33,6 +35,8 @@ export function AssistantResponse({
   busy: boolean;
   /** This reply is being read aloud. */
   reading: boolean;
+  /** This reply is being written, and waits for the assistant's model, which is busy. */
+  waiting?: { retryInMs: number; since: number } | null;
   onDecide(confirmationId: string, decision: Decision): void;
   /** Continues this reply after it failed; missing when it can't be continued. */
   onRetry?: () => void;
@@ -41,6 +45,7 @@ export function AssistantResponse({
   const streaming = message.status === 'streaming';
   const last = message.parts.at(-1);
   const text = streaming ? '' : messageText(message);
+  const thinking = streaming && last?.type !== 'text' && !(last?.type === 'activity' && last.status === 'running');
 
   function renderPart(part: MessagePart, index: number) {
     switch (part.type) {
@@ -69,7 +74,7 @@ export function AssistantResponse({
       <AssistantMark />
       <View style={styles.body}>
         {message.parts.map(renderPart)}
-        {streaming && last?.type !== 'text' && !(last?.type === 'activity' && last.status === 'running') ? <Thinking /> : null}
+        {streaming && waiting ? <WaitingLine waiting={waiting} /> : thinking ? <Thinking /> : null}
         {message.status === 'stopped' ? (
           <View style={styles.note}>
             <Ionicons name="stop-circle-outline" size={16} color={theme.textSecondary} />

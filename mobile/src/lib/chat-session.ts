@@ -23,6 +23,8 @@ export interface ChatState {
   settling: boolean;
   /** A request that failed before its reply started, so it can be sent again. */
   unsent: { request: ChatRequest; spoken: boolean; error: string } | null;
+  /** The reply being written waits for the assistant's model, which is busy; the server tries again after `retryInMs`. */
+  waiting: { retryInMs: number; since: number } | null;
 }
 
 export interface FinishedReply {
@@ -42,13 +44,17 @@ export interface ChatSessionDeps {
 interface Attempt {
   /** The server has started the reply. */
   started: boolean;
-  /** The person's message as shown before the server saved it. */
+  /** The person's message as shown before the server saved it: a new message's local id, or the id of the message being edited. */
   localUserId: string | null;
+  /** For an edit: the conversation as it was, to put back if the server never accepted the change. */
+  restore: { messages: readonly ChatMessage[]; unsettled: Set<string> } | null;
 }
 
 // Streamed text reaches the screen in batches: re-rendering, and re-parsing the markdown, for every token is
-// too slow on low-end phones.
+// too slow on low-end phones. A slow phone gets longer batches: the next waits at least twice as long as the
+// last one took to draw, so the screen is free to scroll and type between them.
 const BATCH_MS = 50;
+const MAX_BATCH_MS = 400;
 
 // The transcript on screen is out of date: the server has already moved on.
 const STALE = new Set(['confirmation_not_pending', 'nothing_to_retry']);
@@ -71,6 +77,8 @@ export class ChatSession {
   /** The assistant message the running request writes. */
   private writing: string | null = null;
   private batch: ReturnType<typeof setTimeout> | null = null;
+  /** How long the next batch waits: BATCH_MS, or longer after a slow draw. */
+  private batchDelay = BATCH_MS;
   /** The saved conversation has been asked for. A new chat has nothing saved, even once it has an id. */
   private historyRequested: boolean;
   /** The replies that make the conversation `settling`. */
@@ -90,6 +98,7 @@ export class ChatSession {
       stopping: false,
       settling: false,
       unsent: null,
+      waiting: null,
     };
   }
 
@@ -124,6 +133,17 @@ export class ChatSession {
 
   send(text: string, spoken: boolean, attachments: FileInfo[]): void {
     void this.run({ kind: 'message', conversationId: this.state.conversationId ?? undefined, text, attachments }, spoken);
+  }
+
+  /**
+   * Changes the words of a message the person sent, and has it answered again. Everything after it leaves the
+   * conversation, here at once and on the server when it accepts the change. Nothing already done is undone.
+   */
+  edit(messageId: string, text: string): void {
+    const { conversationId, messages } = this.state;
+    const target = messages.find((message) => message.id === messageId);
+    if (!conversationId || target?.role !== 'user') return;
+    void this.run({ kind: 'edit', conversationId, messageId, text }, false);
   }
 
   decide(confirmationId: string, decision: 'confirm' | 'cancel', spoken: boolean): void {
@@ -178,25 +198,45 @@ export class ChatSession {
       this.controller = null;
       this.attempt = null;
       this.writing = null;
-      this.update({ running: null, stopping: false, settling: this.unsettled.size > 0 });
+      this.update({ running: null, stopping: false, waiting: null, settling: this.unsettled.size > 0 });
       this.deps.busy(this, false);
       this.deps.changed();
       if (this.unsettled.size > 0) this.settleSoon();
     }
   }
 
-  /** Shows the request straight away: the person's message and an empty reply, or the reply being retried. */
+  /**
+   * Shows the request straight away: the person's message and an empty reply, the edited message with what came
+   * after it gone, or the reply being retried.
+   */
   private begin(request: ChatRequest): Attempt {
-    const attempt: Attempt = { started: false, localUserId: null };
+    const attempt: Attempt = { started: false, localUserId: null, restore: null };
     let { messages } = this.state;
+    let { settling } = this.state;
+    const id = ++localIds;
+    const createdAt = new Date().toISOString();
     if (request.kind === 'message') {
-      const id = ++localIds;
-      const createdAt = new Date().toISOString();
       const user: UserMessage = { id: `local-user-${id}`, role: 'user', text: request.text, attachments: request.attachments, createdAt };
       const reply: AssistantMessage = { id: `local-reply-${id}`, role: 'assistant', parts: [], status: 'streaming', error: null, createdAt };
       attempt.localUserId = user.id;
       this.writing = reply.id;
       messages = [...messages, user, reply];
+    } else if (request.kind === 'edit') {
+      const index = messages.findIndex((message) => message.id === request.messageId);
+      const target = messages[index];
+      if (target?.role === 'user') {
+        attempt.restore = { messages, unsettled: this.unsettled };
+        // The server answers with the message as saved, under the same id, which takes this one's place.
+        attempt.localUserId = target.id;
+        const edited: UserMessage = { ...target, text: request.text, editedAt: createdAt };
+        const reply: AssistantMessage = { id: `local-reply-${id}`, role: 'assistant', parts: [], status: 'streaming', error: null, createdAt };
+        this.writing = reply.id;
+        messages = [...messages.slice(0, index), edited, reply];
+        // A reply cut from the conversation is no longer out of date here.
+        const kept = new Set(messages.map((message) => message.id));
+        this.unsettled = new Set([...this.unsettled].filter((unsettledId) => kept.has(unsettledId)));
+        settling = this.unsettled.size > 0;
+      }
     } else if (request.kind === 'retry') {
       const target = messages.findLast((message): message is AssistantMessage => message.role === 'assistant');
       if (target) {
@@ -205,7 +245,7 @@ export class ChatSession {
         messages = messages.map((message) => (message === target ? retried : message));
       }
     }
-    this.update({ messages, running: request, unsent: null });
+    this.update({ messages, running: request, unsent: null, waiting: null, settling });
     return attempt;
   }
 
@@ -234,6 +274,9 @@ export class ChatSession {
         return this.editWriting((message) => appendText(message, event.text), 'soon');
       case 'part':
         return this.editWriting((message) => setPart(message, event.index, event.part), 'soon');
+      case 'status':
+        this.update({ waiting: event.status === 'waiting_for_model' ? { retryInMs: event.retryInMs, since: Date.now() } : null });
+        return;
       case 'title':
         this.update({ title: event.title });
         this.deps.changed();
@@ -255,6 +298,16 @@ export class ChatSession {
   }
 
   private notSent(request: ChatRequest, spoken: boolean, attempt: Attempt, error: unknown): void {
+    if (request.kind === 'edit') {
+      // The server never took the change, so nothing was cut there: the conversation goes back as it was.
+      if (attempt.restore) this.unsettled = attempt.restore.unsettled;
+      this.update({
+        messages: attempt.restore?.messages ?? this.state.messages,
+        settling: this.unsettled.size > 0,
+        unsent: { request, spoken, error: errorMessage(error) },
+      });
+      return;
+    }
     if (error instanceof ApiError && STALE.has(error.code)) return this.reload();
     if (request.kind === 'retry') return this.endWriting('error', errorMessage(error));
     const shown = new Set([attempt.localUserId, this.writing]);
@@ -330,16 +383,44 @@ export class ChatSession {
   private update(changes: Partial<ChatState>, when: 'now' | 'soon' = 'now'): void {
     this.state = { ...this.state, ...changes };
     if (when === 'now') return this.emit();
-    this.batch ??= setTimeout(() => this.emit(), BATCH_MS);
+    this.batch ??= setTimeout(() => this.emit(), this.batchDelay);
   }
 
   private emit(): void {
     if (this.batch) clearTimeout(this.batch);
     this.batch = null;
+    const started = now();
     for (const listener of this.listeners) listener();
+    // React draws the screen just after the listeners return, before any timer can run: so a timer set now fires
+    // once the draw is done, and how late it fires is how long the batch took to draw.
+    setTimeout(() => {
+      this.batchDelay = Math.min(MAX_BATCH_MS, Math.max(BATCH_MS, 2 * (now() - started)));
+    }, 0);
   }
+}
+
+function now(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
 function isWriting(message: ChatMessage): boolean {
   return message.role === 'assistant' && message.status === 'streaming';
+}
+
+/**
+ * Whether anything after `messageId` in the conversation made a change in a connected system: a confirmed change
+ * that ran, or a lookup that wrote. Editing the message cuts those replies, but what they did stays done.
+ */
+export function madeChangesAfter(messages: readonly ChatMessage[], messageId: string): boolean {
+  const index = messages.findIndex((message) => message.id === messageId);
+  if (index === -1) return false;
+  return messages.slice(index + 1).some(
+    (message) =>
+      message.role === 'assistant' &&
+      message.parts.some(
+        (part) =>
+          (part.type === 'confirmation' && part.changes.some((change) => change.status === 'succeeded' || change.status === 'running')) ||
+          (part.type === 'activity' && part.kind === 'write' && part.status !== 'failed' && part.status !== 'cancelled'),
+      ),
+  );
 }

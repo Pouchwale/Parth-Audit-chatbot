@@ -4,11 +4,10 @@ import type { ParamListBase } from 'expo-router/react-navigation';
 import { useEffect, useEffectEvent, useState, type ReactElement } from 'react';
 import { KeyboardAvoidingView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { ChatMessage } from '@shared/api';
 import { MaxContentWidth, useTheme } from '@/constants/theme';
 import { answerTo } from '@/lib/answer';
 import { attachedFilesText, useAttachments } from '@/lib/attachments';
-import type { FinishedReply } from '@/lib/chat-session';
+import { madeChangesAfter, type FinishedReply } from '@/lib/chat-session';
 import { useChatSessions, useChatState } from '@/lib/chat-sessions';
 import { MAX_MESSAGE_LENGTH } from '@/lib/chat-stream';
 import { useConversations } from '@/lib/conversations';
@@ -18,7 +17,7 @@ import { useShareConversation } from '@/lib/share';
 import { speak, stopSpeaking, useReading } from '@/lib/speech';
 import { pendingConfirmation, spokenReply } from '@/lib/transcript';
 import { useVoiceInput } from '@/lib/voice';
-import { AssistantResponse } from './AssistantResponse';
+import { ChatControlsProvider, type ChatControls, type Decision } from './chat-controls';
 import { ChatHeader } from './ChatHeader';
 import { Composer } from './Composer';
 import { Disclaimer } from './Disclaimer';
@@ -26,10 +25,7 @@ import { HistoryError, HistorySkeleton } from './HistoryState';
 import { MessageList } from './MessageList';
 import { ShareNotice } from './ShareNotice';
 import { UnsentRequest } from './UnsentRequest';
-import { UserBubble } from './UserBubble';
 import { Welcome } from './Welcome';
-
-type Decision = 'confirm' | 'cancel';
 
 /** A conversation: a new one when `conversationId` is missing, otherwise the saved one. */
 export function ChatScreen({ conversationId }: { conversationId?: string }) {
@@ -46,6 +42,8 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
   const sharing = useShareConversation();
   const [draft, setDraft] = useState('');
   const attachments = useAttachments();
+  /** The sent message whose editor is open. */
+  const [editing, setEditing] = useState<ChatControls['editing']>(null);
 
   const busy = state.running !== null;
   const ready = state.history.status === 'ready';
@@ -115,24 +113,39 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
     session.decide(confirmationId, decision, false);
   }
 
-  const lastReply = state.messages.findLast((message) => message.role === 'assistant');
-  const deciding = state.running?.kind === 'decision' ? state.running : null;
-
-  function renderMessage(message: ChatMessage): ReactElement {
-    if (message.role === 'user') return <UserBubble text={message.text} attachments={message.attachments} />;
-    const retryable = !busy && message === lastReply && message.status === 'error';
-    return (
-      <AssistantResponse
-        message={message}
-        answerableId={pending?.id ?? null}
-        deciding={deciding}
-        busy={busy}
-        reading={reading === message.id}
-        onDecide={decide}
-        onRetry={retryable ? () => session.retry() : undefined}
-      />
-    );
+  function retry() {
+    session.retry();
   }
+
+  function startEdit(messageId: string) {
+    stopSpeaking();
+    // Read from the session, not the rendered state, so that this does not change with every streamed piece.
+    setEditing({ id: messageId, madeChanges: madeChangesAfter(session.getState().messages, messageId) });
+  }
+
+  function cancelEdit() {
+    setEditing(null);
+  }
+
+  function saveEdit(messageId: string, text: string) {
+    setEditing(null);
+    tapFeedback();
+    session.edit(messageId, text);
+  }
+
+  const controls: ChatControls = {
+    busy,
+    answerableId: pending?.id ?? null,
+    deciding: state.running?.kind === 'decision' ? state.running : null,
+    reading,
+    waiting: state.waiting,
+    editing,
+    decide,
+    retry,
+    startEdit,
+    cancelEdit,
+    saveEdit,
+  };
 
   let content: ReactElement;
   if (state.history.status === 'loading') {
@@ -148,7 +161,6 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
         messages={state.messages}
         busy={busy}
         footer={unsent ? <UnsentRequest request={unsent.request} error={unsent.error} onResend={() => session.resend()} /> : null}
-        renderMessage={renderMessage}
       />
     );
   }
@@ -169,7 +181,7 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
       />
       <KeyboardAvoidingView behavior="padding" style={styles.body}>
         <View style={styles.column}>
-          {content}
+          <ChatControlsProvider value={controls}>{content}</ChatControlsProvider>
           <Composer
             value={draft}
             onChangeText={setDraft}
