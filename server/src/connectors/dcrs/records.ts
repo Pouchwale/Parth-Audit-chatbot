@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ConnectorError, defineAction, type ActionContext } from '../types.ts';
 import { PDF_TIMEOUT_MS, tokenOf, type DcrsClient } from './client.ts';
 import { documentId, isoDate, limit, patchInWords, pdfForPerson, searchWords, segment, spoken, text } from './inputs.ts';
-import { dcrsNames, dayRecordWords, recordRef } from './names.ts';
+import { aboutDocument, dcrsNames, dayRecordWords, recordRef } from './names.ts';
 import { changeForModel, openedForModel, recordForModel, recordsForModel } from './shape.ts';
 
 /** What a record can be moved on to, as DCRS's own lifecycle names them. */
@@ -64,10 +64,12 @@ export function recordActions(dcrs: DcrsClient) {
       describe: (input) =>
         `List the records${input.documentId ? ` of ${input.documentId}` : ''}${input.from ? ` from ${input.from}` : ''}${input.to ? ` to ${input.to}` : ''}${input.status ? ` that are ${input.status}` : ''}`,
       run: async (ctx, input) => {
-        const answer = await dcrs.json('GET', '/api/v1/records', {
-          token: tokenOf(ctx.credentials),
-          query: { documentId: input.documentId, from: input.from, to: input.to, status: input.status, limit: input.limit ?? 20 },
-        });
+        const answer = await aboutDocument(input.documentId, () =>
+          dcrs.json('GET', '/api/v1/records', {
+            token: tokenOf(ctx.credentials),
+            query: { documentId: input.documentId, from: input.from, to: input.to, status: input.status, limit: input.limit ?? 20 },
+          }),
+        );
         return recordsForModel(answer);
       },
     }),
@@ -78,10 +80,12 @@ export function recordActions(dcrs: DcrsClient) {
       input: z.object({ q: searchWords, documentId: documentId.optional(), from: isoDate.optional(), to: isoDate.optional(), limit: limit(20) }),
       describe: (input) => `Search the records for "${input.q}"`,
       run: async (ctx, input) => {
-        const answer = await dcrs.json('GET', '/api/v1/records/search', {
-          token: tokenOf(ctx.credentials),
-          query: { q: input.q, documentId: input.documentId, from: input.from, to: input.to, limit: input.limit ?? 10 },
-        });
+        const answer = await aboutDocument(input.documentId, () =>
+          dcrs.json('GET', '/api/v1/records/search', {
+            token: tokenOf(ctx.credentials),
+            query: { q: input.q, documentId: input.documentId, from: input.from, to: input.to, limit: input.limit ?? 10 },
+          }),
+        );
         return recordsForModel(answer);
       },
     }),

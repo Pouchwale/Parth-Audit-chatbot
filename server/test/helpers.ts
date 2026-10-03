@@ -54,8 +54,8 @@ export function fakeSystem(extraActions: readonly Action[] = []) {
     ['13', { id: '13', title: 'Missing calibration label', status: 'open' }],
   ]);
   const calls: { action: string; credentials: unknown; input: unknown }[] = [];
-  // lookupRunning, when set, holds each lookup until it resolves.
-  const state: { acceptsSignIn: boolean; lookupRunning?: Promise<void> } = { acceptsSignIn: true };
+  // lookupRunning and changeRunning, when set, hold each lookup or change until they resolve.
+  const state: { acceptsSignIn: boolean; lookupRunning?: Promise<void>; changeRunning?: Promise<void> } = { acceptsSignIn: true };
   const passwords: Record<string, string> = { alice: 'alice-pw', bob: 'bob-pw', admin: 'admin-pw' };
 
   const connector: Connector = {
@@ -85,6 +85,7 @@ export function fakeSystem(extraActions: readonly Action[] = []) {
         describe: (input) => `Close item ${input.id} with the note "${input.note}"`,
         run: async (ctx, input) => {
           calls.push({ action: 'close_item', credentials: ctx.credentials, input });
+          await state.changeRunning;
           const item = items.get(input.id);
           if (!item) throw new ConnectorError('not_found', `Item ${input.id} doesn't exist.`);
           item.status = 'closed';

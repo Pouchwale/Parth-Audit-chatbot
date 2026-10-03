@@ -107,6 +107,24 @@ it('streams an edit like a message, with the start event carrying the edited mes
   expect(await saved(alice, first.conversationId)).toEqual([start.userMessage, done.message]);
 });
 
+it('keeps the title of the conversation when its first message is changed, as the person may have chosen it', async () => {
+  await t.close();
+  t = await setup({}, { titler: async () => 'Open items' });
+  const alice = await t.signIn('alice');
+  t.model.queue(says('Two items are open.'));
+  const first = await ask(alice, 'What is open?');
+  expect(first.title).toBe('Open items');
+  const asked = await askedBy(alice, first);
+
+  t.model.queue(says('Nothing is closed.'));
+  const response = await edit(alice, first.conversationId, asked.id, { text: 'What is closed?', stream: true });
+  const events = parseEvents(response.payload);
+  expect(events.map((e) => e.type)).not.toContain('title');
+  expect(findEvent(events, 'done').reply.title).toBe('Open items');
+  const [conv] = await t.db.select({ title: conversations.title }).from(conversations).where(eq(conversations.id, first.conversationId));
+  expect(conv!.title).toBe('Open items');
+});
+
 it('keeps the files on the message unless the edit says which files it carries', async () => {
   const alice = await t.signIn('alice');
   const readings = await upload(alice, 'readings.txt', 'Viscosity 19, 20, 21');

@@ -26,6 +26,22 @@ const WHICH_RECORD = 'Say which record: its recordId, or its documentId with the
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 
+/**
+ * Asks DCRS something about the document `said` names, if it names one. When no document fits, DCRS's answer points to
+ * its own web API, which the model would repeat to the person, so the assistant says it in its own terms. Any other
+ * refusal keeps DCRS's words.
+ */
+export async function aboutDocument<T>(said: string | undefined, ask: () => Promise<T>): Promise<T> {
+  try {
+    return await ask();
+  } catch (error) {
+    if (said !== undefined && error instanceof ConnectorError && error.kind === 'not_found') {
+      throw new ConnectorError('not_found', `No document matches "${said}". Look it up with find_documents, or say its format number.`);
+    }
+    throw error;
+  }
+}
+
 function named(answer: unknown): NamedDocument {
   if (!isObject(answer) || typeof answer.id !== 'string' || !answer.id) {
     throw new ConnectorError('unavailable', 'DCRS answered in a way the assistant does not understand.');
@@ -44,13 +60,15 @@ export function dcrsNames(dcrs: DcrsClient) {
    * refuses a name that fits several of the person's documents, one another department keeps, or none.
    */
   async function document(ctx: ActionContext, said: string): Promise<NamedDocument> {
-    return named(await dcrs.json('GET', `/api/v1/documents/${segment(said)}`, { token: tokenOf(ctx.credentials) }));
+    return named(await aboutDocument(said, () => dcrs.json('GET', `/api/v1/documents/${segment(said)}`, { token: tokenOf(ctx.credentials) })));
   }
 
   /** A document's record of a day (DCRS's today when no date is given): its id, or null when it is not started. */
   async function dayRecord(ctx: ActionContext, said: string, date: string | undefined): Promise<{ document: NamedDocument; date: string | undefined; recordId: string | null }> {
     const day = date ?? 'today';
-    const answer = await dcrs.json('GET', '/api/v1/records', { token: tokenOf(ctx.credentials), query: { documentId: said, from: day, to: day, limit: 5 } });
+    const answer = await aboutDocument(said, () =>
+      dcrs.json('GET', '/api/v1/records', { token: tokenOf(ctx.credentials), query: { documentId: said, from: day, to: day, limit: 5 } }),
+    );
     if (!isObject(answer)) throw new ConnectorError('unavailable', 'DCRS answered in a way the assistant does not understand.');
     const document = named(answer.document);
     const started = (Array.isArray(answer.records) ? answer.records : []).flatMap((record) =>

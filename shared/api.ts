@@ -87,7 +87,8 @@ export type FilePurpose = 'open' | 'download' | 'share';
  * same stream, whose start event carries the edited message as saved).
  *
  * What was already done is not undone: a change made in a connected system stays made, and the action log, the
- * download records and the weekly reports keep every action with the words that asked for it at the time.
+ * download records and the weekly reports keep every action with the words that asked for it at the time. The
+ * conversation keeps its title, even when its first message is the one changed: the person can rename it.
  *
  * Refused with 404 message_not_found (no such message of the person's in that conversation; someone else's
  * conversation is 404 conversation_not_found, as everywhere), 409 conversation_busy (a reply in it is still being
@@ -106,6 +107,14 @@ export interface EditMessageRequest {
   attachments?: string[];
 }
 
+/**
+ * Confirms or cancels the changes on a confirmation card:
+ * POST /assistant/conversations/:conversationId/decision
+ *
+ * Confirmed, the changes run one after another, in order, and none runs after one that fails. Stopping the reply
+ * (the request ending early, as when Stop is pressed or the phone loses its connection, which the server can't tell
+ * apart) ends only the reply's words: the confirmed changes still run, and the card says how each one went.
+ */
 export interface DecisionRequest {
   confirmationId: string;
   decision: 'confirm' | 'cancel';

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { AssistantMessage, AssistantReply, ConversationDetail, StreamEvent } from '@shared/api.ts';
 import { ModelBusy } from '../src/agent/model.ts';
 import { actions, conversations } from '../src/db/schema.ts';
-import { callsTool, cutOff, fails, findEvent, parseEvents, says, setup, streams } from './helpers.ts';
+import { callsTool, callsTools, cutOff, fails, findEvent, parseEvents, says, setup, streams } from './helpers.ts';
 
 const ORIGIN = 'http://localhost:8081';
 
@@ -238,11 +238,16 @@ async function listen() {
 
 /** Starts a streamed message over real HTTP and reads until `until` has arrived. */
 async function streamUntil(address: string, token: string, text: string, until: string) {
+  return postStreamUntil(address, token, '/assistant/messages', { text }, until);
+}
+
+/** Starts any streamed request over real HTTP and reads until `until` has arrived. */
+async function postStreamUntil(address: string, token: string, path: string, payload: object, until: string) {
   const client = new AbortController();
-  const response = await fetch(`${address}/assistant/messages`, {
+  const response = await fetch(`${address}${path}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ text, stream: true }),
+    body: JSON.stringify({ ...payload, stream: true }),
     signal: client.signal,
   });
   const reader = response.body!.getReader();
@@ -250,6 +255,16 @@ async function streamUntil(address: string, token: string, text: string, until: 
   let received = '';
   while (!received.includes(until)) received += decoder.decode((await reader.read()).value, { stream: true });
   return client;
+}
+
+/** Waits until the server has seen the person go: no connection is open any more. */
+async function disconnected() {
+  await vi.waitFor(
+    () =>
+      new Promise<void>((resolve, reject) =>
+        t.app.server.getConnections((_error, open) => (open === 0 ? resolve() : reject(new Error(`${open} open`)))),
+      ),
+  );
 }
 
 async function settled() {
@@ -295,12 +310,7 @@ it('lets a lookup that is already running finish when the person stops, and reco
 
   const client = await streamUntil(await listen(), alice, 'What is there?', '"status":"running"');
   client.abort();
-  await vi.waitFor(
-    () =>
-      new Promise<void>((resolve, reject) =>
-        t.app.server.getConnections((_error, open) => (open === 0 ? resolve() : reject(new Error(`${open} open`)))),
-      ),
-  );
+  await disconnected();
   finishLookup();
 
   const conv = await settled();
@@ -308,4 +318,36 @@ it('lets a lookup that is already running finish when the person stops, and reco
   expect(conv.transcript[1]).toMatchObject({ status: 'stopped', parts: [{ type: 'activity', status: 'succeeded' }] });
   expect(conv.messages.at(-1)).toMatchObject({ role: 'tool', content: expect.stringContaining('Fire exit blocked') });
   expect(t.model.requests).toHaveLength(1);
+});
+
+it('makes every change the person confirmed when they stop the reply, and the card says how each went', async () => {
+  // Stop ends the reply's words. It does not halt confirmed changes part-way: the person confirmed them together, and
+  // a phone that loses its connection looks the same to the server as one whose Stop was pressed (see shared/api.ts).
+  const alice = await t.signIn('alice');
+  t.model.queue(callsTools([['fake__close_item', { id: '12', note: 'done' }], ['fake__close_item', { id: '13', note: 'done' }]]));
+  const proposed = (await t.as(alice).post('/assistant/messages', { text: 'Close items 12 and 13' })).json<AssistantReply>();
+  let finishChange = () => {};
+  t.system.state.changeRunning = new Promise((resolve) => (finishChange = resolve));
+
+  const decision = { confirmationId: proposed.confirmation!.id, decision: 'confirm' };
+  const client = await postStreamUntil(await listen(), alice, `/assistant/conversations/${proposed.conversationId}/decision`, decision, '"status":"running"');
+  client.abort();
+  await disconnected();
+  finishChange();
+
+  const conv = await settled();
+  expect(await t.db.select({ status: actions.status, request: actions.request }).from(actions)).toEqual([
+    { status: 'succeeded', request: 'Close items 12 and 13' },
+    { status: 'succeeded', request: 'Close items 12 and 13' },
+  ]);
+  expect([t.system.items.get('12')!.status, t.system.items.get('13')!.status]).toEqual(['closed', 'closed']);
+  expect(conv.transcript[1]).toMatchObject({
+    id: proposed.message.id,
+    status: 'stopped',
+    parts: [{ type: 'confirmation', status: 'confirmed', changes: [{ status: 'succeeded' }, { status: 'succeeded' }] }],
+  });
+  expect(conv.pending).toBeNull();
+  // The model was not asked to report back, and both results wait in the history for the next turn.
+  expect(t.model.requests).toHaveLength(1);
+  expect(conv.messages.slice(-2)).toMatchObject([{ role: 'tool' }, { role: 'tool' }]);
 });

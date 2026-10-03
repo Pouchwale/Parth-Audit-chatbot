@@ -3,6 +3,7 @@ import { defineAction } from '../types.ts';
 import { tokenOf, type DcrsClient } from './client.ts';
 import { BUDGET, fit, WEB_ONLY_IN_LISTS, without } from './fit.ts';
 import { documentId, isoDate, limit, searchWords, segment, text } from './inputs.ts';
+import { aboutDocument } from './names.ts';
 import { documentForModel, documentsForModel, figuresForModel, todayForModel } from './shape.ts';
 
 /** The documents themselves, the day's facts, figures from history and HR Master Data. All of them only read. */
@@ -27,7 +28,9 @@ export function documentActions(dcrs: DcrsClient) {
       input: z.object({ documentId }),
       describe: (input) => `Read document ${input.documentId}`,
       run: async (ctx, input) => {
-        const answer = await dcrs.json('GET', `/api/v1/documents/${segment(input.documentId)}`, { token: tokenOf(ctx.credentials) });
+        const answer = await aboutDocument(input.documentId, () =>
+          dcrs.json('GET', `/api/v1/documents/${segment(input.documentId)}`, { token: tokenOf(ctx.credentials) }),
+        );
         return documentForModel(answer);
       },
     }),

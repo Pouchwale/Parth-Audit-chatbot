@@ -989,4 +989,42 @@ group('naming a record by its document', () => {
         'Several documents answer "line clearance" — say which one, by its id or its format number. They are: F/QC/15-A Area Line Clearance – Printing (qc-line-clearance-printing); F/QC/15-G Area Line Clearance – Slitting (qc-line-clearance-slitting).',
     });
   });
+
+  it("says in the assistant's own terms, not DCRS's web API's, that no document fits the words", async () => {
+    // DCRS's answer points to its web API, which the model would repeat to the person.
+    const none = () => refusal(404, 'not-found', 'No document matches "No Such Format XYZ". Find it with GET /api/v1/documents?q=… first.');
+    const plain = { kind: 'not_found', message: 'No document matches "No Such Format XYZ". Look it up with find_documents, or say its format number.' };
+    const { connector } = standInDcrs({
+      'GET /api/v1/records': none,
+      'GET /api/v1/records/search': none,
+      'GET /api/v1/documents/No%20Such%20Format%20XYZ': none,
+    });
+    const named = { documentId: 'No Such Format XYZ' };
+    // Changes and reads that name a record by its document, as their card or sentence is made.
+    for (const [name, input] of [
+      ['fill_record_with_sample_data', named],
+      ['open_record', named],
+      ['get_record', named],
+      ['record_action', { ...named, action: 'submit' }],
+    ] as const) {
+      const action = actionOf(connector.actions, name);
+      await expect(action.describe(action.input.parse(input), ctx), name).rejects.toMatchObject(plain);
+    }
+    // Reads that name a document when they run.
+    for (const [name, input] of [
+      ['get_document', named],
+      ['list_records', named],
+      ['search_records', { ...named, q: 'viscosity' }],
+    ] as const) {
+      const action = actionOf(connector.actions, name);
+      await expect(action.run(ctx, action.input.parse(input)), name).rejects.toMatchObject(plain);
+    }
+    // Any other refusal stays in DCRS's words, such as a document another department keeps.
+    const kept = standInDcrs({ 'GET /api/v1/records': () => refusal(403, 'forbidden', 'F/HR/17 is kept by Human Resources, not your department.') });
+    const read = actionOf(kept.connector.actions, 'get_record');
+    await expect(read.describe({ documentId: 'F/HR/17' }, ctx)).rejects.toMatchObject({
+      kind: 'forbidden',
+      message: 'F/HR/17 is kept by Human Resources, not your department.',
+    });
+  });
 });
