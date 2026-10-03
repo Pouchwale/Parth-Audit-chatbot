@@ -1,6 +1,7 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ExportDetail } from '@shared/api';
 import { MONOSPACE } from '@/components/chat/CodeBlock';
 import { FileActionNotice } from '@/components/files/FileActionNotice';
@@ -19,6 +20,7 @@ import { count, downloadKind, fileSize, PURPOSE_LABEL, systemName } from '@/lib/
 export default function ExportDetailScreen() {
   const { exportId } = useLocalSearchParams<{ exportId: string }>();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { call } = useAuth();
   const [detail, setDetail] = useState<ExportDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +46,7 @@ export default function ExportDetailScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}>
+    <ScrollView contentContainerStyle={[styles.content, { paddingBottom: Spacing.xxl + insets.bottom }]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}>
       {error ? <Notice tone="danger">{error}</Notice> : null}
       {detail ? <Details detail={detail} /> : error ? null : <ActivityIndicator color={theme.accent} style={styles.loading} />}
     </ScrollView>

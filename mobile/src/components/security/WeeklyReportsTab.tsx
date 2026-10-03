@@ -2,6 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { WeeklyReportSummary, WeeklyTotals } from '@shared/api';
 import { Button, Chip, Notice } from '@/components/ui';
 import { Radius, Spacing, useTheme } from '@/constants/theme';
@@ -13,6 +14,7 @@ import { count } from '@/lib/format';
 /** Week by week, what everyone did: the week in progress first, with live numbers. */
 export function WeeklyReportsTab() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { call } = useAuth();
   const [weeks, setWeeks] = useState<WeeklyReportSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +49,7 @@ export function WeeklyReportsTab() {
     <FlatList
       data={weeks ?? []}
       keyExtractor={(week) => week.weekStart}
-      contentContainerStyle={styles.list}
+      contentContainerStyle={[styles.list, { paddingBottom: Spacing.lg + insets.bottom }]}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}

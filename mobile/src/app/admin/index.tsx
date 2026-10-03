@@ -2,6 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AccountSummary } from '@shared/api';
 import { Chip, Notice } from '@/components/ui';
 import { MaxContentWidth, Radius, Spacing, useTheme } from '@/constants/theme';
@@ -11,6 +12,7 @@ import { STATUS_LABEL, statusTone, timeAgo } from '@/lib/format';
 
 export default function AccountsScreen() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { call } = useAuth();
   const [accounts, setAccounts] = useState<AccountSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +51,7 @@ export default function AccountsScreen() {
     <FlatList
       data={accounts ?? []}
       keyExtractor={(account) => account.id}
-      contentContainerStyle={styles.list}
+      contentContainerStyle={[styles.list, { paddingBottom: Spacing.lg + insets.bottom }]}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
       ListHeaderComponent={
         <View style={styles.header}>

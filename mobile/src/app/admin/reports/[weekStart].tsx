@@ -1,6 +1,7 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { WeeklyReport, WeeklyTotals, WeeklyUserSummary } from '@shared/api';
 import { PersonWeekCard } from '@/components/security/PersonWeekCard';
 import { Card, Chip, Notice, SectionTitle } from '@/components/ui';
@@ -14,6 +15,7 @@ import { fileSize } from '@/lib/format';
 export default function WeeklyReportScreen() {
   const { weekStart } = useLocalSearchParams<{ weekStart: string }>();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { call } = useAuth();
   const [report, setReport] = useState<WeeklyReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +50,7 @@ export default function WeeklyReportScreen() {
   return (
     <>
       <Stack.Screen options={{ title: report ? weekRange(report.weekStart, report.weekEnd) : 'Weekly report' }} />
-      <ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: Spacing.xxl + insets.bottom }]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}>
         {error ? <Notice tone="danger">{error}</Notice> : null}
         {!report ? (
           error ? null : <ActivityIndicator color={theme.accent} style={styles.loading} />

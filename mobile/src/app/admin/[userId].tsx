@@ -2,6 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AccountDetail, ActionEntry, LoginEntry, SessionEntry } from '@shared/api';
 import { Button, Card, Chip, Notice, SectionTitle } from '@/components/ui';
 import { MaxContentWidth, Spacing, useTheme } from '@/constants/theme';
@@ -13,6 +14,7 @@ import { dateTime, failureLabel, STATUS_LABEL, statusTone, timeAgo } from '@/lib
 export default function AccountScreen() {
   const { userId } = useLocalSearchParams<{ userId: string }>();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { call } = useAuth();
   const ask = useConfirm();
   const [detail, setDetail] = useState<AccountDetail | null>(null);
@@ -52,15 +54,14 @@ export default function AccountScreen() {
       await load();
     } catch (e) {
       setError(errorMessage(e));
-    } finally {
-      setSigningOut(null);
     }
+    setSigningOut(null);
   }
 
   return (
     <>
       <Stack.Screen options={{ title: detail?.account.displayName ?? 'Account' }} />
-      <ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: Spacing.xxl + insets.bottom }]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}>
         {error ? <Notice tone="danger">{error}</Notice> : null}
         {!detail ? (
           error ? null : <ActivityIndicator color={theme.accent} style={styles.loading} />

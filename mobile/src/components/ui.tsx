@@ -260,7 +260,8 @@ const styles = StyleSheet.create({
   field: { gap: Spacing.xs },
   fieldLabel: { fontSize: 13, fontWeight: '600' },
   fieldBox: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: Radius.md },
-  fieldInput: { flex: 1, minHeight: 48, paddingHorizontal: Spacing.md, fontSize: 16 },
+  // minWidth 0: a browser's input otherwise keeps room for twenty characters, and pushes the eye button out at large font sizes.
+  fieldInput: { flex: 1, minWidth: 0, minHeight: 48, paddingHorizontal: Spacing.md, fontSize: 16 },
   eye: { width: 44, height: 48, alignItems: 'center', justifyContent: 'center' },
   chip: { alignSelf: 'flex-start', paddingHorizontal: Spacing.sm, paddingVertical: 2, borderRadius: Radius.pill },
   chipText: { fontSize: 12, fontWeight: '600' },

@@ -3,6 +3,7 @@ import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Button, Card, Chip, Notice, SectionTitle, SegmentedControl, Toggle } from '@/components/ui';
 import { MaxContentWidth, Spacing, useTheme } from '@/constants/theme';
 import { api, errorMessage, SERVER_URL } from '@/lib/api';
@@ -28,9 +29,11 @@ const READ_ALOUD_OPTIONS: readonly { value: ReadAloudPreference; label: string }
 export default function SettingsScreen() {
   const theme = useTheme();
   const { settings, update } = useSettings();
+  // The bars at the bottom (Android's gesture or button bar, the iPhone's home indicator) sit over the content.
+  const insets = useSafeAreaInsets();
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
+    <ScrollView contentContainerStyle={[styles.content, { paddingBottom: Spacing.xxl + insets.bottom }]}>
       <ProfileCard />
 
       <SectionTitle>Appearance</SectionTitle>

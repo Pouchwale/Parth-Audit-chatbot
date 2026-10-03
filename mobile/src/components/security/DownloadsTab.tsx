@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { InlineError } from '@/components/chat/InlineError';
 import { SearchField } from '@/components/SearchField';
 import { Button, Notice } from '@/components/ui';
@@ -21,6 +22,7 @@ const MAX_SEARCH_LENGTH = 200;
  */
 export function DownloadsTab({ initialPersonId, initialPeriod }: { initialPersonId: string | null; initialPeriod: Period }) {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
   const search = useDebounced(text.trim(), SEARCH_DELAY_MS);
   const [personId, setPersonId] = useState(initialPersonId);
@@ -50,7 +52,7 @@ export function DownloadsTab({ initialPersonId, initialPeriod }: { initialPerson
         data={downloads.exports ?? []}
         keyExtractor={(entry) => entry.id}
         renderItem={({ item }) => <DownloadRow entry={item} />}
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[styles.list, { paddingBottom: Spacing.lg + insets.bottom }]}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         // After a failed page, the next one loads only when the person asks, not on every scroll.
