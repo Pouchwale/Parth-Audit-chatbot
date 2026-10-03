@@ -20,9 +20,21 @@ export interface EditControls {
   busy: boolean;
   /** What came after this message made changes in DCRS, which stay made. */
   madeChanges: boolean;
+  /** Why the last change to this message wasn't saved, if it wasn't. */
+  error: string | null;
+  /** The words typed so far into the editor, or null when it has only just opened. */
+  draft: string | null;
+  /** The editor's box takes the keyboard's focus when drawn: only when the pen was just tapped. */
+  focus: boolean;
+  /** The chat is the screen in front, so the phone's back button closes the editor. */
+  inFront: boolean;
   onStart(): void;
   onCancel(): void;
   onSave(text: string): void;
+  /** The words in the editor changed. */
+  onChange(text: string): void;
+  /** The editor's box gained (true) or lost (false) the keyboard's focus. */
+  onFocusChange(focused: boolean): void;
 }
 
 /**
@@ -71,7 +83,19 @@ export function UserBubble({
     return (
       <View style={styles.message}>
         {attachments && attachments.length > 0 ? <MessageAttachments files={attachments} /> : null}
-        <MessageEditor initial={text} madeChanges={edit.madeChanges} busy={edit.busy} onCancel={edit.onCancel} onSave={edit.onSave} />
+        <MessageEditor
+          original={text}
+          draft={edit.draft}
+          error={edit.error}
+          madeChanges={edit.madeChanges}
+          busy={edit.busy}
+          focus={edit.focus}
+          inFront={edit.inFront}
+          onChange={edit.onChange}
+          onFocusChange={edit.onFocusChange}
+          onCancel={edit.onCancel}
+          onSave={edit.onSave}
+        />
       </View>
     );
   }
@@ -108,7 +132,8 @@ export function UserBubble({
           />
         </View>
       ) : null}
-      {hint ? (
+      {/* Only while Mitra is still answering: once it has finished, the pen works again and the hint would mislead. */}
+      {hint && edit?.busy ? (
         <Text style={[styles.hint, { color: theme.textSecondary }]} accessibilityLiveRegion="polite">
           {hint}
         </Text>

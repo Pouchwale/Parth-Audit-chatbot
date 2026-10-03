@@ -1,5 +1,5 @@
 import { router, useIsFocused, useNavigation } from 'expo-router';
-import type { DrawerNavigationProp } from 'expo-router/drawer';
+import { useDrawerStatus, type DrawerNavigationProp } from 'expo-router/drawer';
 import type { ParamListBase } from 'expo-router/react-navigation';
 import { useEffect, useEffectEvent, useState, type ReactElement } from 'react';
 import { KeyboardAvoidingView, StyleSheet, View } from 'react-native';
@@ -33,6 +33,7 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
   const navigation = useNavigation<DrawerNavigationProp<ParamListBase>>();
   // The drawer keeps a chat mounted once it has been shown, and so does a screen opened on top of it.
   const focused = useIsFocused();
+  const drawerOpen = useDrawerStatus() === 'open';
   const sessions = useChatSessions();
   const [session, setSession] = useState(() => sessions.open(conversationId));
   const state = useChatState(session);
@@ -42,8 +43,6 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
   const sharing = useShareConversation();
   const [draft, setDraft] = useState('');
   const attachments = useAttachments();
-  /** The sent message whose editor is open. */
-  const [editing, setEditing] = useState<ChatControls['editing']>(null);
 
   const busy = state.running !== null;
   const ready = state.history.status === 'ready';
@@ -119,19 +118,25 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
 
   function startEdit(messageId: string) {
     stopSpeaking();
-    // Read from the session, not the rendered state, so that this does not change with every streamed piece.
-    setEditing({ id: messageId, madeChanges: madeChangesAfter(session.getState().messages, messageId) });
+    session.openEditor(messageId);
   }
 
   function cancelEdit() {
-    setEditing(null);
+    session.closeEditor();
   }
 
   function saveEdit(messageId: string, text: string) {
-    setEditing(null);
     tapFeedback();
     session.edit(messageId, text);
   }
+
+  // Worked out as the screen is drawn, so the editor says changes stay as soon as a change after its message runs.
+  // Kept to plain values, so the controls change only when one of them does, not with every streamed piece.
+  const editorId = state.editor?.messageId ?? null;
+  const editorError = state.editor?.error ?? null;
+  const editorFocus = state.editor?.focus ?? false;
+  const editorMadeChanges = editorId !== null && madeChangesAfter(state.messages, editorId);
+  const editing = editorId === null ? null : { id: editorId, error: editorError, madeChanges: editorMadeChanges, focus: editorFocus };
 
   const controls: ChatControls = {
     busy,
@@ -140,11 +145,15 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
     reading,
     waiting: state.waiting,
     editing,
+    inFront: focused && !drawerOpen,
     decide,
     retry,
     startEdit,
     cancelEdit,
     saveEdit,
+    editorFocused: () => session.editorFocused(),
+    draftOf: session.draftOf,
+    keepDraft: session.keepDraft,
   };
 
   let content: ReactElement;
@@ -160,6 +169,7 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
       <MessageList
         messages={state.messages}
         busy={busy}
+        editingId={editorId}
         footer={unsent ? <UnsentRequest request={unsent.request} error={unsent.error} onResend={() => session.resend()} /> : null}
       />
     );

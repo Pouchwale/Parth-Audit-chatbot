@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 // Not expo-linking: on web it would open links in place of the app, where this opens a new tab.
 import { Linking, ScrollView, StyleSheet, Text, View, type TextStyle, type ViewStyle } from 'react-native';
 import { Renderer, useMarkdown, type MarkedStyles, type RendererInterface } from 'react-native-marked';
@@ -38,11 +38,7 @@ class ChatRenderer extends Renderer implements RendererInterface {
 
   // A wide table scrolls sideways instead of running off a phone's screen.
   override table(header: ReactNode[][], rows: ReactNode[][][], tableStyle?: ViewStyle, rowStyle?: ViewStyle, cellStyle?: ViewStyle): ReactNode {
-    return (
-      <ScrollView key={this.getKey()} horizontal showsHorizontalScrollIndicator={false} style={styles.tableScroll}>
-        {super.table(header, rows, tableStyle, rowStyle, cellStyle)}
-      </ScrollView>
-    );
+    return <SidewaysTable key={this.getKey()}>{super.table(header, rows, tableStyle, rowStyle, cellStyle)}</SidewaysTable>;
   }
 
   // Remote images aren't loaded: the description stands in for them, as a link.
@@ -57,6 +53,28 @@ class ChatRenderer extends Renderer implements RendererInterface {
   private linkStyle(): TextStyle {
     return { color: this.colors.accent, textDecorationLine: 'underline' };
   }
+}
+
+/** A table that scrolls sideways when it is wider than the screen, and then says so under it, with its scroll bar showing. */
+function SidewaysTable({ children }: { children: ReactNode }) {
+  const theme = useTheme();
+  const [width, setWidth] = useState(0);
+  const [contentWidth, setContentWidth] = useState(0);
+  const wider = width > 0 && contentWidth > width + 1;
+  return (
+    <View style={styles.table}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={wider}
+        // Android hides an idle scroll bar unless told otherwise.
+        persistentScrollbar={wider}
+        onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+        onContentSizeChange={(contentWide) => setContentWidth(contentWide)}>
+        {children}
+      </ScrollView>
+      {wider ? <Text style={[styles.sideways, { color: theme.textSecondary }]}>Scroll sideways to see every column.</Text> : null}
+    </View>
+  );
 }
 
 function markdownStyles(theme: Theme): MarkedStyles {
@@ -125,5 +143,6 @@ function MarkdownBlock({ value, streaming }: { value: string; streaming: boolean
 
 const styles = StyleSheet.create({
   blocks: {},
-  tableScroll: { marginVertical: Spacing.xs },
+  table: { marginVertical: Spacing.xs, gap: Spacing.xs },
+  sideways: { fontSize: 13, lineHeight: 18 },
 });

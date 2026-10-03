@@ -40,11 +40,14 @@ const keyOf = (message: ChatMessage) => message.id;
 export function MessageList({
   messages,
   busy,
+  editingId,
   footer,
 }: {
   messages: readonly ChatMessage[];
   /** A request is running: sending one brings the latest message into view. */
   busy: boolean;
+  /** The message whose editor is open. */
+  editingId: string | null;
   /** Shown below the last message. */
   footer: ReactElement | null;
 }) {
@@ -54,6 +57,9 @@ export function MessageList({
   const offset = useRef(0);
   const newest = useRef<{ id: string; height: number } | null>(null);
   const [away, setAway] = useState(false);
+  /** The message whose editor box has the keyboard's focus. */
+  const focusedEditor = useRef<string | null>(null);
+  const listHeight = useRef(0);
 
   // Jumps rather than scrolls: an animation would be interrupted by the reply growing underneath it.
   function showLatest() {
@@ -90,13 +96,30 @@ export function MessageList({
   // and the row renderer stay the same while a reply streams in, and only the row whose message changed is drawn.
   const data = [...messages].reverse();
 
+  function onEditorFocus(messageId: string, focused: boolean) {
+    if (focused) focusedEditor.current = messageId;
+    else if (focusedEditor.current === messageId) focusedEditor.current = null;
+  }
+
+  // When the list gets shorter while an editor has the keyboard (the keyboard opening, or the window shrinking), the
+  // editor is brought down to just above it, so that its words and Save stay on the screen.
+  function onListLayout(event: LayoutChangeEvent) {
+    const next = event.nativeEvent.layout.height;
+    const shrank = next < listHeight.current - 1;
+    listHeight.current = next;
+    const id = focusedEditor.current;
+    if (!shrank || id === null || id !== editingId) return;
+    const index = data.findIndex((message) => message.id === id);
+    if (index >= 0) list.current?.scrollToIndex({ index, viewPosition: 0, viewOffset: Spacing.md, animated: true });
+  }
+
   // The newest row is measured only while the person reads further up: measuring costs the browser a layout each time
   // the reply grows, and nothing is done with it while the list follows the reply anyway.
   function renderItem({ item, index }: ListRenderItemInfo<ChatMessage>) {
     const isNewest = index === 0;
     return (
       <View onLayout={isNewest && away ? (event) => onNewestLayout(item.id, event) : undefined}>
-        <MessageRow message={item} isNewest={isNewest} />
+        <MessageRow message={item} isNewest={isNewest} onEditorFocus={onEditorFocus} />
       </View>
     );
   }
@@ -116,6 +139,9 @@ export function MessageList({
         style={LIST_STYLE}
         contentContainerStyle={styles.content}
         onScroll={onScroll}
+        onLayout={onListLayout}
+        // A row not drawn yet has no place to scroll to: the nearest guess will do.
+        onScrollToIndexFailed={({ index, averageItemLength }) => list.current?.scrollToOffset({ offset: index * averageItemLength, animated: true })}
         scrollEventThrottle={32}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
@@ -137,7 +163,15 @@ export function MessageList({
 }
 
 /** One message of the conversation, drawn from its message and the chat's controls. */
-function MessageRow({ message, isNewest }: { message: ChatMessage; isNewest: boolean }) {
+function MessageRow({
+  message,
+  isNewest,
+  onEditorFocus,
+}: {
+  message: ChatMessage;
+  isNewest: boolean;
+  onEditorFocus(messageId: string, focused: boolean): void;
+}) {
   const controls = useChatControls();
   if (message.role === 'user') {
     const editing = controls.editing?.id === message.id ? controls.editing : null;
@@ -150,9 +184,19 @@ function MessageRow({ message, isNewest }: { message: ChatMessage; isNewest: boo
           editing: editing !== null,
           busy: controls.busy,
           madeChanges: editing?.madeChanges ?? false,
+          error: editing?.error ?? null,
+          // Read as the editor is drawn: typing keeps the words without drawing anything.
+          draft: editing ? controls.draftOf(message.id) : null,
+          focus: editing?.focus ?? false,
+          inFront: controls.inFront,
           onStart: () => controls.startEdit(message.id),
           onCancel: controls.cancelEdit,
           onSave: (text) => controls.saveEdit(message.id, text),
+          onChange: (text) => controls.keepDraft(message.id, text),
+          onFocusChange: (focused) => {
+            if (focused) controls.editorFocused();
+            onEditorFocus(message.id, focused);
+          },
         }}
       />
     );

@@ -21,10 +21,20 @@ export interface ChatState {
    * connection to, or one another device is writing. It is loaded again once it is done.
    */
   settling: boolean;
-  /** A request that failed before its reply started, so it can be sent again. */
+  /** A request that failed before its reply started, so it can be sent again. A change to a sent message goes back to its editor instead. */
   unsent: { request: ChatRequest; spoken: boolean; error: string } | null;
   /** The reply being written waits for the assistant's model, which is busy; the server tries again after `retryInMs`. */
   waiting: { retryInMs: number; since: number } | null;
+  /**
+   * The sent message open for changing its words, and why the last change to it wasn't saved, if it wasn't. The words
+   * being typed are kept too, outside the state (see draftOf), so that typing redraws only the editor.
+   */
+  editor: {
+    messageId: string;
+    error: string | null;
+    /** Its box takes the keyboard's focus when drawn: only when the pen was just tapped, not when drawn again. */
+    focus: boolean;
+  } | null;
 }
 
 export interface FinishedReply {
@@ -47,7 +57,7 @@ interface Attempt {
   /** The person's message as shown before the server saved it: a new message's local id, or the id of the message being edited. */
   localUserId: string | null;
   /** For an edit: the conversation as it was, to put back if the server never accepted the change. */
-  restore: { messages: readonly ChatMessage[]; unsettled: Set<string> } | null;
+  restore: { messages: readonly ChatMessage[]; unsettled: Set<string>; unsent: ChatState['unsent'] } | null;
 }
 
 // Streamed text reaches the screen in batches: re-rendering, and re-parsing the markdown, for every token is
@@ -85,6 +95,8 @@ export class ChatSession {
   private unsettled = new Set<string>();
   private settleTries = 0;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The words typed into the open editor, or being saved from it: null until the editor has been drawn. */
+  private draft: { messageId: string; text: string } | null = null;
 
   constructor(deps: ChatSessionDeps, conversationId?: string) {
     this.deps = deps;
@@ -99,6 +111,7 @@ export class ChatSession {
       settling: false,
       unsent: null,
       waiting: null,
+      editor: null,
     };
   }
 
@@ -137,7 +150,8 @@ export class ChatSession {
 
   /**
    * Changes the words of a message the person sent, and has it answered again. Everything after it leaves the
-   * conversation, here at once and on the server when it accepts the change. Nothing already done is undone.
+   * conversation, here at once and on the server when it accepts the change. Nothing already done is undone. If the
+   * server never takes the change, the conversation goes back as it was and the editor opens again on the words.
    */
   edit(messageId: string, text: string): void {
     const { conversationId, messages } = this.state;
@@ -145,6 +159,33 @@ export class ChatSession {
     if (!conversationId || target?.role !== 'user') return;
     void this.run({ kind: 'edit', conversationId, messageId, text }, false);
   }
+
+  /** Opens the editor on a message the person sent, in place of any other editor. */
+  openEditor(messageId: string): void {
+    const target = this.state.messages.find((message) => message.id === messageId);
+    if (target?.role !== 'user') return;
+    this.draft = null;
+    this.update({ editor: { messageId, error: null, focus: true } });
+  }
+
+  /** The editor's box has the keyboard's focus: drawn again, it doesn't take it. */
+  editorFocused(): void {
+    const { editor } = this.state;
+    if (editor?.focus) this.update({ editor: { ...editor, focus: false } });
+  }
+
+  closeEditor(): void {
+    this.draft = null;
+    if (this.state.editor) this.update({ editor: null });
+  }
+
+  /** The words typed so far into the editor of `messageId`, or null when it has only just opened. */
+  readonly draftOf = (messageId: string): string | null => (this.draft?.messageId === messageId ? this.draft.text : null);
+
+  /** Keeps the words being typed into an editor, so that they outlast its being drawn again. Draws nothing. */
+  readonly keepDraft = (messageId: string, text: string): void => {
+    this.draft = { messageId, text };
+  };
 
   decide(confirmationId: string, decision: 'confirm' | 'cancel', spoken: boolean): void {
     const { conversationId } = this.state;
@@ -211,8 +252,7 @@ export class ChatSession {
    */
   private begin(request: ChatRequest): Attempt {
     const attempt: Attempt = { started: false, localUserId: null, restore: null };
-    let { messages } = this.state;
-    let { settling } = this.state;
+    let { messages, settling, editor } = this.state;
     const id = ++localIds;
     const createdAt = new Date().toISOString();
     if (request.kind === 'message') {
@@ -225,7 +265,10 @@ export class ChatSession {
       const index = messages.findIndex((message) => message.id === request.messageId);
       const target = messages[index];
       if (target?.role === 'user') {
-        attempt.restore = { messages, unsettled: this.unsettled };
+        attempt.restore = { messages, unsettled: this.unsettled, unsent: this.state.unsent };
+        // The editor closes on the new words, which are kept until the server has them.
+        editor = null;
+        this.draft = { messageId: target.id, text: request.text };
         // The server answers with the message as saved, under the same id, which takes this one's place.
         attempt.localUserId = target.id;
         const edited: UserMessage = { ...target, text: request.text, editedAt: createdAt };
@@ -245,7 +288,7 @@ export class ChatSession {
         messages = messages.map((message) => (message === target ? retried : message));
       }
     }
-    this.update({ messages, running: request, unsent: null, waiting: null, settling });
+    this.update({ messages, running: request, unsent: null, waiting: null, settling, editor });
     return attempt;
   }
 
@@ -253,6 +296,8 @@ export class ChatSession {
     switch (event.type) {
       case 'start': {
         attempt.started = true;
+        // An edit the server has taken: its words are the message's now.
+        if (attempt.restore && this.draft?.messageId === attempt.localUserId) this.draft = null;
         const { conversationId, title, userMessage, message } = event;
         const replacements = new Map<string, ChatMessage>([[this.writing ?? message.id, message]]);
         if (attempt.localUserId && userMessage) replacements.set(attempt.localUserId, userMessage);
@@ -299,12 +344,15 @@ export class ChatSession {
 
   private notSent(request: ChatRequest, spoken: boolean, attempt: Attempt, error: unknown): void {
     if (request.kind === 'edit') {
-      // The server never took the change, so nothing was cut there: the conversation goes back as it was.
+      // The server never took the change, so nothing was cut there: the conversation goes back as it was, a message
+      // that failed to send before it too, and the editor opens again on the words typed, with why they weren't saved.
       if (attempt.restore) this.unsettled = attempt.restore.unsettled;
+      this.draft = { messageId: request.messageId, text: request.text };
       this.update({
         messages: attempt.restore?.messages ?? this.state.messages,
         settling: this.unsettled.size > 0,
-        unsent: { request, spoken, error: errorMessage(error) },
+        unsent: attempt.restore?.unsent ?? null,
+        editor: { messageId: request.messageId, error: errorMessage(error), focus: false },
       });
       return;
     }
@@ -347,7 +395,11 @@ export class ChatSession {
   private show(detail: ConversationDetail): void {
     this.unsettled = new Set(detail.messages.filter(isWriting).map((message) => message.id));
     const settling = this.unsettled.size > 0;
-    this.update({ title: detail.title, messages: detail.messages, history: { status: 'ready' }, settling });
+    // An editor stays open while its message is still in the conversation.
+    const { editor } = this.state;
+    const kept = editor && detail.messages.some((message) => message.id === editor.messageId) ? editor : null;
+    if (!kept) this.draft = null;
+    this.update({ title: detail.title, messages: detail.messages, history: { status: 'ready' }, settling, editor: kept });
     if (settling) this.settleSoon();
   }
 

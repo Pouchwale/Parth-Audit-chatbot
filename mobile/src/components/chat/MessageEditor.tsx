@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BackHandler, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import { BackHandler, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Button } from '@/components/ui';
 import { Radius, Spacing, useColorSchemeSetting, useTheme } from '@/constants/theme';
 import { MAX_MESSAGE_LENGTH } from '@/lib/chat-stream';
@@ -16,38 +16,65 @@ export const CHANGES_STAY = 'Changes already made in DCRS stay as they are.';
 /**
  * A message the person sent, open for changing its words, in place of its bubble. Save is off while the words are
  * empty, unchanged or too long, and while Mitra is answering. The phone's back button and Escape close it.
+ *
+ * The words typed are kept outside it (onChange), so that it starts from them when it is drawn again: scrolled back
+ * into view, or opened again on words that weren't saved, with why.
  */
 export function MessageEditor({
-  initial,
+  original,
+  draft,
+  error,
   madeChanges,
   busy,
+  focus,
+  inFront,
+  onChange,
+  onFocusChange,
   onCancel,
   onSave,
 }: {
-  initial: string;
+  /** The words as sent. */
+  original: string;
+  /** Words typed before this editor was drawn, or null when there are none. */
+  draft: string | null;
+  /** Why the last change wasn't saved, if it wasn't. */
+  error: string | null;
   /** What came after this message made changes in DCRS, which stay made. */
   madeChanges: boolean;
   /** Mitra is answering, so nothing can be saved yet. */
   busy: boolean;
+  /** Take the keyboard's focus when drawn: only when the pen was just tapped. */
+  focus: boolean;
+  /** The chat is the screen in front, so the phone's back button is the editor's. */
+  inFront: boolean;
+  onChange(text: string): void;
+  onFocusChange(focused: boolean): void;
   onCancel(): void;
   onSave(text: string): void;
 }) {
   const theme = useTheme();
   const scheme = useColorSchemeSetting();
-  const [text, setText] = useState(initial);
+  const [text, setText] = useState(() => draft ?? original);
   const [webHeight, setWebHeight] = useState(MIN_INPUT_HEIGHT);
   const trimmed = text.trim();
   const tooLong = trimmed.length > MAX_MESSAGE_LENGTH;
-  const canSave = trimmed.length > 0 && trimmed !== initial.trim() && !tooLong && !busy;
+  const canSave = trimmed.length > 0 && trimmed !== original.trim() && !tooLong && !busy;
 
-  // Android's back button closes the editor instead of leaving the chat. Browsers and iPhones have no such button.
+  // Android's back button closes the editor instead of leaving the chat, but only while the chat is in front: with
+  // another screen or the menu over it, back is theirs. Browsers and iPhones have no such button.
   useEffect(() => {
+    if (!inFront) return;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       onCancel();
       return true;
     });
     return () => subscription.remove();
-  }, [onCancel]);
+  }, [inFront, onCancel]);
+
+  function change(value: string) {
+    setText(value);
+    onChange(value);
+  }
 
   function save() {
     if (canSave) onSave(trimmed);
@@ -57,9 +84,11 @@ export function MessageEditor({
     <View style={[styles.editor, { backgroundColor: theme.surface, borderColor: theme.accent }]}>
       <TextInput
         value={text}
-        onChangeText={setText}
+        onChangeText={change}
         accessibilityLabel="Edit message"
-        autoFocus
+        autoFocus={focus}
+        onFocus={() => onFocusChange(true)}
+        onBlur={() => onFocusChange(false)}
         multiline
         submitBehavior="newline"
         placeholder="Your message"
@@ -77,6 +106,11 @@ export function MessageEditor({
         }
         style={[styles.input, { color: theme.text }, AUTO_SIZE_STYLE, REPORTS_CONTENT_SIZE ? { height: webHeight } : null]}
       />
+      {error ? (
+        <Text style={[styles.note, { color: theme.danger }]} accessibilityLiveRegion="polite">
+          {`Your change wasn't saved. ${error}`}
+        </Text>
+      ) : null}
       {tooLong ? (
         <Text style={[styles.note, { color: theme.warning }]} accessibilityLiveRegion="polite">
           Messages can be up to {MAX_MESSAGE_LENGTH.toLocaleString()} characters. Shorten this one to save it.
