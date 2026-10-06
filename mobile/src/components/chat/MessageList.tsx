@@ -59,6 +59,8 @@ export function MessageList({
   const [away, setAway] = useState(false);
   /** The message whose editor box has the keyboard's focus. */
   const focusedEditor = useRef<string | null>(null);
+  /** The height of the row whose editor is open, as last laid out. */
+  const editorRow = useRef<{ id: string; height: number } | null>(null);
   const listHeight = useRef(0);
 
   // Jumps rather than scrolls: an animation would be interrupted by the reply growing underneath it.
@@ -102,7 +104,9 @@ export function MessageList({
   }
 
   // When the list gets shorter while an editor has the keyboard (the keyboard opening, or the window shrinking), the
-  // editor is brought down to just above it, so that its words and Save stay on the screen.
+  // editor is brought down to just above it, so that its words and Save stay on the screen. When the whole editor
+  // can't fit there (a phone on its side), its top is shown instead, where the words are: Save is then a scroll away,
+  // and back in view once the keyboard closes.
   function onListLayout(event: LayoutChangeEvent) {
     const next = event.nativeEvent.layout.height;
     const shrank = next < listHeight.current - 1;
@@ -110,16 +114,30 @@ export function MessageList({
     const id = focusedEditor.current;
     if (!shrank || id === null || id !== editingId) return;
     const index = data.findIndex((message) => message.id === id);
-    if (index >= 0) list.current?.scrollToIndex({ index, viewPosition: 0, viewOffset: Spacing.md, animated: true });
+    if (index < 0) return;
+    const height = editorRow.current?.id === id ? editorRow.current.height : 0;
+    const fits = height + Spacing.md <= next;
+    list.current?.scrollToIndex({ index, viewPosition: fits ? 0 : 1, viewOffset: fits ? Spacing.md : 0, animated: true });
   }
 
-  // The newest row is measured only while the person reads further up: measuring costs the browser a layout each time
-  // the reply grows, and nothing is done with it while the list follows the reply anyway.
+  function onRowLayout(id: string, newestAway: boolean, event: LayoutChangeEvent) {
+    if (id === editingId) editorRow.current = { id, height: event.nativeEvent.layout.height };
+    if (newestAway) onNewestLayout(id, event);
+  }
+
+  // Only two rows are measured: the newest while the person reads further up (measuring costs the browser a layout
+  // each time the reply grows, and nothing is done with it while the list follows the reply anyway), and the one
+  // whose editor is open. Each is measured by a sensor laid over it, which is drawn only while it is needed: a row
+  // drawn without a size handler never reports its size in a browser, even once it is given one, since the browser
+  // build starts watching a view's size only when the view is first drawn.
   function renderItem({ item, index }: ListRenderItemInfo<ChatMessage>) {
     const isNewest = index === 0;
+    const newestAway = isNewest && away;
+    const measured = newestAway || item.id === editingId;
     return (
-      <View onLayout={isNewest && away ? (event) => onNewestLayout(item.id, event) : undefined}>
+      <View>
         <MessageRow message={item} isNewest={isNewest} onEditorFocus={onEditorFocus} />
+        {measured ? <View style={styles.sensor} onLayout={(event) => onRowLayout(item.id, newestAway, event)} /> : null}
       </View>
     );
   }
@@ -219,6 +237,8 @@ function MessageRow({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  /** Laid over a row to measure it, without taking touches. */
+  sensor: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, pointerEvents: 'none' },
   content: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.lg, gap: Spacing.xl },
   jump: {
     position: 'absolute',
