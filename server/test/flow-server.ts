@@ -5,12 +5,15 @@
 //
 // People sign in with their DCRS email and password, as always. What the model does with a message:
 //   anything        → a short echo of the words, streamed in pieces
-//   "due today"     → the today lookup, then a streamed summary of it
+//   "due today"     → the today lookup, then a streamed summary of it (also "બાકી" in Gujarati, "बाकी" in Hindi, "baki")
 //   "start <fmt>"   → one card with two steps: open the day's record of <fmt>, then fill it with sample data; once
-//                     confirmed, a streamed "Done"
+//                     confirmed, a streamed "Done" (also "<fmt> શરૂ કરો" and "<fmt> शुरू करो"; pest control is F/HR/17)
 //   "long"          → about 6,000 characters in about 300 pieces, 30 ms apart, with a table, a list and a code block
 //   "busy"          → the waiting status for about 5 seconds, then an answer
 //   "fail"          → a few words, then an error (the reply is saved as failed); Retry then works
+// It answers in the language the server's note tells the real model to answer in: the person's choice in the app's
+// settings, else Gujarati or Hindi (in their own script or in Latin letters) when the message is written in it, else
+// English. So a Gujarati question gets a Gujarati answer, and a Hindi one a Hindi answer.
 // --port picks the port (8899 unless given), --origin the web origin allowed to call it (CORS; * for any).
 import { randomBytes } from 'node:crypto';
 import Groq from 'groq-sdk';
@@ -68,6 +71,63 @@ function calls(list: [name: string, input: Record<string, unknown>][]): Groq.Cha
   );
 }
 
+type Voice = 'en' | 'gu' | 'gu-latin' | 'hi' | 'hi-latin';
+
+/** The language the note from the app tells the model to answer in (agent/language.ts languageNote). */
+function answerLanguage(context: string | undefined): Voice {
+  const note = context ?? '';
+  const chosen = /Reply language, chosen in the app's settings: (English|Gujarati|Hindi)\b/.exec(note)?.[1];
+  if (chosen) return chosen === 'Gujarati' ? 'gu' : chosen === 'Hindi' ? 'hi' : 'en';
+  const written = /(?:Their latest message is|This conversation is) in (Gujarati|Hindi), in (Latin letters|Gujarati script|Devanagari)/.exec(note);
+  if (!written) return 'en';
+  const language = written[1] === 'Gujarati' ? 'gu' : 'hi';
+  return written[2] === 'Latin letters' ? `${language}-latin` : language;
+}
+
+/** What the scripted model says, in each language. */
+const SAYS = {
+  echo: (text: string): Record<Voice, string> => ({
+    en: `You said: "${text}". This is the flow server, so there is no real model behind this reply.`,
+    gu: `તમે લખ્યું: "${text}". આ flow server છે, એટલે આ જવાબ પાછળ કોઈ સાચું model નથી.`,
+    'gu-latin': `Tame lakhyu: "${text}". Aa flow server che, etle aa javab pachhal koi sachu model nathi.`,
+    hi: `आपने लिखा: "${text}"। यह flow server है, इसलिए इस जवाब के पीछे कोई असली model नहीं है।`,
+    'hi-latin': `Aapne likha: "${text}". Yeh flow server hai, isliye is jawab ke peeche koi asli model nahi hai.`,
+  }),
+  today: (listed: boolean): Record<Voice, string> => ({
+    en: `Here is today. ${listed ? 'The lookup answered: see the records it lists as due.' : 'Nothing is listed as due.'} Overdue work, if any, comes first in the lookup above, then what is due today.`,
+    gu: `આજનું જોઈ લીધું. ${listed ? 'lookup એ જે રેકોર્ડ બાકી બતાવ્યા છે તે જુઓ.' : 'આજે કંઈ બાકી નથી.'} મોડું થયેલું કામ, જો હોય તો, ઉપરના lookup માં પહેલાં છે, પછી આજે કરવાનું.`,
+    'gu-latin': `Aajnu joi lidhu. ${listed ? 'Lookup e je record baki batavya che te juo.' : 'Aaje kai baki nathi.'} Modu thayelu kaam, jo hoy to, uparna lookup ma pahela che, pachhi aaje karvanu.`,
+    hi: `आज का देख लिया। ${listed ? 'lookup ने जो रिकॉर्ड बाकी बताए हैं, वे देखिए।' : 'आज कुछ बाकी नहीं है।'} देर वाला काम, अगर है, तो ऊपर के lookup में पहले है, फिर आज का।`,
+    'hi-latin': `Aaj ka dekh liya. ${listed ? 'Lookup ne jo record baki bataye hain, ve dekhiye.' : 'Aaj kuch baki nahi hai.'} Der wala kaam, agar hai, to upar ke lookup mein pehle hai, phir aaj ka.`,
+  }),
+  done: (failed: boolean): Record<Voice, string> =>
+    failed
+      ? {
+          en: 'Not all of that could be done. The card above says what was and was not done.',
+          gu: 'એ બધું થઈ શક્યું નહીં. ઉપરનું card કહે છે કે શું થયું અને શું નહીં.',
+          'gu-latin': 'E badhu thai shakyu nahi. Uparnu card kahe che ke shu thayu ane shu nahi.',
+          hi: 'यह सब नहीं हो पाया। ऊपर का card बताता है कि क्या हुआ और क्या नहीं।',
+          'hi-latin': 'Yeh sab nahi ho paaya. Upar ka card batata hai ki kya hua aur kya nahi.',
+        }
+      : {
+          en: 'Done. The record is started and filled with sample data, marked as made up. It is still a draft.',
+          gu: 'થઈ ગયું. રેકોર્ડ શરૂ કરીને નમૂનાના ડેટાથી ભર્યો છે, જે બનાવટી તરીકે ચિહ્નિત છે. તે હજુ draft છે.',
+          'gu-latin': 'Thai gayu. Record sharu karine namuna na data thi bharyo che, je banavati tarike chihnit che. Te haju draft che.',
+          hi: 'हो गया। रिकॉर्ड शुरू करके नमूना डेटा से भर दिया है, जिसे बनावटी बताया गया है। यह अभी draft है।',
+          'hi-latin': 'Ho gaya. Record shuru karke namuna data se bhar diya hai, jise banavati bataya gaya hai. Yeh abhi draft hai.',
+        },
+};
+
+/** The document a "start" request names, in any of the three languages: its format number, or pest control. */
+function startedFormat(text: string): string | null {
+  const english = /^start\s+(.+)$/i.exec(text);
+  if (english) return english[1]!.replace(/^today'?s\s+/i, '').replace(/\s+record$/i, '').trim();
+  if (!/(?:શરૂ કરો|शुरू करो)\s*$/.test(text)) return null;
+  const format = /\bF\s?[/-]\s?[A-Za-z]{2,4}\s?[/-]\s?\d{1,3}\b/.exec(text)?.[0];
+  if (format) return format;
+  return /પેસ્ટ કંટ્રોલ|पेस्ट कंट्रोल|pest control/i.test(text) ? 'F/HR/17' : null;
+}
+
 /** The person's latest words in the request, lowercased, and whether tools have already answered since. */
 function situation(messages: readonly Message[]) {
   const lastUser = messages.findLastIndex((m) => m.role === 'user');
@@ -108,15 +168,14 @@ function longAnswer(): string {
 
 const model: Model = async (request, options = {}) => {
   const { text, lower, answered, results } = situation(request.messages);
-  if (lower.includes('due today')) {
+  const language = answerLanguage(request.context);
+  if (lower.includes('due today') || /બાકી|बाकी|बाक़ी|\bbaa?ki\b/.test(lower)) {
     if (!answered) return calls([['dcrs__todays_facts', {}]]);
     const today = results.map((m) => String((m as { content?: unknown }).content ?? '')).join(' ');
-    const due = /"due":\s*(\[|\{)/.test(today) ? 'The lookup answered: see the records it lists as due.' : 'Nothing is listed as due.';
-    return stream(`Here is today. ${due} Overdue work, if any, comes first in the lookup above, then what is due today.`, options);
+    return stream(SAYS.today(/"due":\s*(\[|\{)/.test(today))[language], options);
   }
-  const start = /^start\s+(.+)$/i.exec(text);
-  if (start && !answered) {
-    const format = start[1]!.replace(/^today'?s\s+/i, '').replace(/\s+record$/i, '').trim();
+  const format = startedFormat(text);
+  if (format && !answered) {
     return calls([
       ['dcrs__open_record', { documentId: format }],
       ['dcrs__fill_record_with_sample_data', { documentId: format }],
@@ -124,7 +183,7 @@ const model: Model = async (request, options = {}) => {
   }
   if (answered) {
     const failed = results.some((m) => /"error"/.test(String((m as { content?: unknown }).content ?? '')));
-    return stream(failed ? "Not all of that could be done. The card above says what was and was not done." : "Done. The record is started and filled with sample data, marked as made up. It is still a draft.", options);
+    return stream(SAYS.done(failed)[language], options);
   }
   if (lower === 'long') return stream(longAnswer(), options, 20, 30);
   if (lower === 'busy') {
@@ -147,7 +206,7 @@ const model: Model = async (request, options = {}) => {
     }
     return stream('That worked the second time. The first try failed on purpose, so Retry could be tested.', options);
   }
-  return stream(`You said: "${text}". This is the flow server, so there is no real model behind this reply.`, options);
+  return stream(SAYS.echo(text)[language], options);
 };
 
 const config = loadConfig({
