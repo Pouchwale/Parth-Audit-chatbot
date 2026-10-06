@@ -50,10 +50,12 @@ export function documentActions(dcrs: DcrsClient) {
       input: z.object({ question: text(600), documentId: documentId.optional(), from: isoDate.optional(), to: isoDate.optional() }),
       describe: (input) => `Work out the figures for "${input.question}"`,
       run: async (ctx, input) => {
-        const answer = await dcrs.json('GET', '/api/v1/figures', {
-          token: tokenOf(ctx.credentials),
-          query: { question: input.question, documentId: input.documentId, from: input.from, to: input.to },
-        });
+        const answer = await aboutDocument(input.documentId, () =>
+          dcrs.json('GET', '/api/v1/figures', {
+            token: tokenOf(ctx.credentials),
+            query: { question: input.question, documentId: input.documentId, from: input.from, to: input.to },
+          }),
+        );
         return figuresForModel(answer);
       },
     }),

@@ -998,6 +998,7 @@ group('naming a record by its document', () => {
       'GET /api/v1/records': none,
       'GET /api/v1/records/search': none,
       'GET /api/v1/documents/No%20Such%20Format%20XYZ': none,
+      'GET /api/v1/figures': none,
     });
     const named = { documentId: 'No Such Format XYZ' };
     // Changes and reads that name a record by its document, as their card or sentence is made.
@@ -1015,6 +1016,7 @@ group('naming a record by its document', () => {
       ['get_document', named],
       ['list_records', named],
       ['search_records', { ...named, q: 'viscosity' }],
+      ['history_figures', { ...named, question: 'Which line was out of range most this year?' }],
     ] as const) {
       const action = actionOf(connector.actions, name);
       await expect(action.run(ctx, action.input.parse(input)), name).rejects.toMatchObject(plain);
