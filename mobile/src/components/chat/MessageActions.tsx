@@ -14,7 +14,7 @@ export function MessageActions({ id, text, reading }: { id: string; text: string
       <Action
         icon={reading ? 'stop-circle-outline' : 'volume-high-outline'}
         label={reading ? 'Stop reading' : 'Read aloud'}
-        onPress={() => (reading ? stopSpeaking() : speak(text, id))}
+        onPress={() => (reading ? stopSpeaking() : speak(text, id, { asked: true }))}
       />
     </View>
   );

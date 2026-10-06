@@ -1,4 +1,5 @@
 import type { AssistantMessage, AssistantReply, ChatMessage, ConfirmationPart, MessagePart } from '@shared/api';
+import { mainLanguage, type SpeechLanguage } from './speech-voice';
 
 // Why the server drops a waiting change when the person sends a new message instead of answering.
 const MOVED_ON = 'The person moved on without confirming, so this change was not made.';
@@ -50,9 +51,26 @@ function isWaiting(part: MessagePart): part is ConfirmationPart {
   return part.type === 'confirmation' && part.status === 'pending';
 }
 
-/** A finished reply as it is read aloud, ending with the question when changes wait for confirmation. */
-export function spokenReply({ reply, confirmation }: AssistantReply): string {
+/**
+ * The question read out after a reply whose changes wait for confirmation, in the reply's language. The changes are
+ * described in English (the connected system's words); in Gujarati or Hindi they stay in the one sentence that asks
+ * about them, so the voice of that language says them too, as one person would, rather than an English voice taking
+ * over in the middle.
+ */
+const CONFIRM_QUESTION: Record<SpeechLanguage, (changes: readonly string[]) => string> = {
+  en: (changes) => `Please confirm: ${changes.join('. ')}. Say confirm or cancel.`,
+  gu: (changes) => `કૃપા કરીને કન્ફર્મ કરો: ${changes.join('; ')}. હા કે ના કહો.`,
+  hi: (changes) => `कृपया कन्फर्म करें: ${changes.join('; ')}। हाँ या ना कहिए।`,
+};
+
+/**
+ * A finished reply as it is read aloud, ending with the question when changes wait for confirmation. The question is
+ * asked in the reply's language, or when the reply has no words of its own, in `asked`: the language the person chose
+ * for replies, or the one their request was written in.
+ */
+export function spokenReply({ reply, confirmation }: AssistantReply, asked: SpeechLanguage | null = null): string {
   if (!confirmation) return reply;
-  const changes = confirmation.changes.map((change) => change.summary).join('. ');
-  return [reply, `Please confirm: ${changes}. Say confirm or cancel.`].filter(Boolean).join('\n\n');
+  const changes = confirmation.changes.map((change) => change.summary.replace(/[.\s]+$/, ''));
+  const language = mainLanguage(reply) ?? asked ?? 'en';
+  return [reply, CONFIRM_QUESTION[language](changes)].filter(Boolean).join('\n\n');
 }

@@ -1,12 +1,13 @@
 import { createContext, useContext } from 'react';
 import type { ChatState } from '@/lib/chat-session';
+import type { VoiceNote } from '@/lib/speech';
 
 export type Decision = 'confirm' | 'cancel';
 
 /**
  * What the rows of a conversation need from the screen, besides their own message. It changes when a request starts
- * or ends, a card becomes answerable, reading aloud starts or stops, or an editor opens: not with every piece of a
- * reply that streams in, so that rows whose message did not change are not drawn again.
+ * or ends, a card becomes answerable, reading aloud starts or stops (or finds no voice for a language), or an editor
+ * opens: not with every piece of a reply that streams in, so that rows whose message did not change are not drawn again.
  */
 export interface ChatControls {
   /** A request is running. */
@@ -17,6 +18,8 @@ export interface ChatControls {
   deciding: { confirmationId: string; decision: Decision } | null;
   /** The id of the reply being read aloud. */
   reading: string | null;
+  /** The reply under which to say that a language in it had no voice to read it aloud. */
+  voiceNote: VoiceNote | null;
   /** The reply being written waits for the assistant's model. */
   waiting: ChatState['waiting'];
   /**

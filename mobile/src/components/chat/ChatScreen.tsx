@@ -14,7 +14,8 @@ import { useConversations } from '@/lib/conversations';
 import { tapFeedback } from '@/lib/haptics';
 import { useSettings } from '@/lib/settings';
 import { useShareConversation } from '@/lib/share';
-import { speak, stopSpeaking, useReading } from '@/lib/speech';
+import { speak, stopSpeaking, useReading, useVoiceNote } from '@/lib/speech';
+import { mainLanguage } from '@/lib/speech-voice';
 import { pendingConfirmation, spokenReply } from '@/lib/transcript';
 import { useVoiceInput } from '@/lib/voice';
 import { ChatControlsProvider, type ChatControls, type Decision } from './chat-controls';
@@ -40,6 +41,7 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
   const { settings } = useSettings();
   const { conversations, startNewChat } = useConversations();
   const reading = useReading();
+  const voiceNote = useVoiceNote();
   const sharing = useShareConversation();
   const [draft, setDraft] = useState('');
   const attachments = useAttachments();
@@ -91,8 +93,13 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
   }, [conversationId, state.conversationId, sessions, focused]);
 
   const onReply = useEffectEvent(({ reply, spoken }: FinishedReply) => {
-    const { readAloud } = settings;
-    if (focused && (readAloud === 'always' || (readAloud === 'afterVoice' && spoken))) speak(spokenReply(reply), reply.message.id);
+    const { readAloud, replyLanguage } = settings;
+    if (!focused || !(readAloud === 'always' || (readAloud === 'afterVoice' && spoken))) return;
+    // A card's question is asked in the reply's language; a reply with no words of its own (only the card) asks it
+    // in the language chosen for replies, or the one the request was written in.
+    const request = state.messages.findLast((message) => message.role === 'user');
+    const asked = replyLanguage === 'auto' ? mainLanguage(request?.text ?? '') : replyLanguage;
+    speak(spokenReply(reply, asked), reply.message.id);
   });
   useEffect(() => session.onReply((finished) => onReply(finished)), [session]);
 
@@ -143,6 +150,7 @@ export function ChatScreen({ conversationId }: { conversationId?: string }) {
     answerableId: pending?.id ?? null,
     deciding: state.running?.kind === 'decision' ? state.running : null,
     reading,
+    voiceNote,
     waiting: state.waiting,
     editing,
     inFront: focused && !drawerOpen,

@@ -11,13 +11,21 @@ import { useAuth } from '@/lib/auth';
 import { useConfirm } from '@/lib/confirm';
 import { useConversations } from '@/lib/conversations';
 import { ROLE_LABEL } from '@/lib/format';
-import { useSettings, type AppearancePreference, type ReadAloudPreference } from '@/lib/settings';
+import { useSettings, type AppearancePreference, type ReadAloudPreference, type ReplyLanguage } from '@/lib/settings';
 import { DOWNLOADS_RECORDED } from '@/lib/share';
 
 const APPEARANCE_OPTIONS: readonly { value: AppearancePreference; label: string }[] = [
   { value: 'system', label: 'System' },
   { value: 'light', label: 'Light' },
   { value: 'dark', label: 'Dark' },
+];
+
+// Each language named in its own script, as people look for it; a screen reader says its English name.
+const REPLY_LANGUAGE_OPTIONS: readonly { value: ReplyLanguage; label: string; spoken?: string }[] = [
+  { value: 'auto', label: 'The language I write in' },
+  { value: 'en', label: 'English' },
+  { value: 'gu', label: 'ગુજરાતી', spoken: 'Gujarati' },
+  { value: 'hi', label: 'हिन्दी', spoken: 'Hindi' },
 ];
 
 const READ_ALOUD_OPTIONS: readonly { value: ReadAloudPreference; label: string }[] = [
@@ -43,6 +51,25 @@ export default function SettingsScreen() {
         value={settings.appearance}
         onChange={(appearance) => update({ appearance })}
       />
+
+      <SectionTitle>Language</SectionTitle>
+      <Card>
+        <Text style={[styles.label, { color: theme.text }]}>Mitra replies in</Text>
+        <View accessibilityRole="radiogroup" accessibilityLabel="Mitra replies in">
+          {REPLY_LANGUAGE_OPTIONS.map((option) => (
+            <RadioRow
+              key={option.value}
+              label={option.label}
+              spoken={option.spoken}
+              selected={settings.replyLanguage === option.value}
+              onPress={() => update({ replyLanguage: option.value })}
+            />
+          ))}
+        </View>
+        <Text style={[styles.hint, { color: theme.textSecondary }]}>
+          You can ask in English, Gujarati or Hindi, in its own letters or in English letters.
+        </Text>
+      </Card>
 
       <SectionTitle>Voice</SectionTitle>
       <Card>
@@ -123,10 +150,11 @@ function ProfileCard() {
   );
 }
 
-function RadioRow({ label, selected, onPress }: { label: string; selected: boolean; onPress(): void }) {
+/** One choice of a radio group. `spoken` is what a screen reader says for it, when that differs from the label. */
+function RadioRow({ label, spoken, selected, onPress }: { label: string; spoken?: string | undefined; selected: boolean; onPress(): void }) {
   const theme = useTheme();
   return (
-    <Pressable accessibilityRole="radio" aria-checked={selected} onPress={onPress} style={styles.radioRow}>
+    <Pressable accessibilityRole="radio" accessibilityLabel={spoken} aria-checked={selected} onPress={onPress} style={styles.radioRow}>
       <Ionicons
         name={selected ? 'radio-button-on' : 'radio-button-off'}
         size={22}

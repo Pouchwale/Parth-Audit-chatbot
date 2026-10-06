@@ -228,6 +228,7 @@ function MessageRow({
       deciding={controls.deciding}
       busy={controls.busy}
       reading={controls.reading === message.id}
+      unvoiced={controls.voiceNote?.messageId === message.id ? controls.voiceNote.language : null}
       waiting={streaming && isNewest ? controls.waiting : null}
       onDecide={controls.decide}
       onRetry={retryable ? controls.retry : undefined}

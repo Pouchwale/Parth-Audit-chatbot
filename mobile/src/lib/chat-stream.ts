@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import type { AssistantReply, DecisionRequest, EditMessageRequest, FileInfo, MessageRequest, RetryRequest, StreamEvent } from '@shared/api';
 import { ApiError, conversationPath, requestFailed, serverBase, unreachable } from './api';
 import { timeZone } from './device';
+import { replyLanguage } from './settings';
 import { readSse } from './sse';
 
 /**
@@ -93,7 +94,8 @@ export async function streamChat(
 }
 
 function endpoint(request: ChatRequest): { path: string; body: MessageRequest | EditMessageRequest | DecisionRequest | RetryRequest } {
-  const zone = timeZone();
+  // Every request that runs a turn says how to answer: the device's time zone, and the language from the settings.
+  const how = { timeZone: timeZone(), replyLanguage: replyLanguage(), stream: true };
   switch (request.kind) {
     case 'message':
       return {
@@ -101,8 +103,7 @@ function endpoint(request: ChatRequest): { path: string; body: MessageRequest | 
         body: {
           conversationId: request.conversationId,
           text: request.text,
-          timeZone: zone,
-          stream: true,
+          ...how,
           attachments: request.attachments.length > 0 ? request.attachments.map((file) => file.id) : undefined,
         },
       };
@@ -110,15 +111,15 @@ function endpoint(request: ChatRequest): { path: string; body: MessageRequest | 
       // No attachments: the message keeps the files it has.
       return {
         path: `${conversationPath(request.conversationId)}/messages/${encodeURIComponent(request.messageId)}/edit`,
-        body: { text: request.text, timeZone: zone, stream: true },
+        body: { text: request.text, ...how },
       };
     case 'decision':
       return {
         path: `${conversationPath(request.conversationId)}/decision`,
-        body: { confirmationId: request.confirmationId, decision: request.decision, timeZone: zone, stream: true },
+        body: { confirmationId: request.confirmationId, decision: request.decision, ...how },
       };
     case 'retry':
-      return { path: `${conversationPath(request.conversationId)}/retry`, body: { timeZone: zone, stream: true } };
+      return { path: `${conversationPath(request.conversationId)}/retry`, body: how };
   }
 }
 
