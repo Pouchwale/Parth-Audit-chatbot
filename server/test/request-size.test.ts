@@ -33,9 +33,12 @@ it('starts every request with the same bytes for every person and every day: the
 
 it('keeps the standing part of the request within the free plan, and reports its size', () => {
   const sizes = sizesOf(typicalRequest(kapila));
-  // Before 2-Oct-2026 the instructions and tools took 11,735 characters (about 2,800 tokens as JSON).
-  expect(sizes.staticPrefix).toBeLessThan(11_000);
-  expect(sizes.estimatedTokens).toBeLessThan(2_900);
+  // Before 2-Oct-2026 the instructions and tools took 11,735 characters (about 2,800 tokens as JSON); on 3-Oct-2026
+  // 10,767. The rule to answer in the language and script asked in (6-Oct-2026) added 629 characters, 149 tokens as
+  // gpt-oss counts them (o200k_base): 11,396. It is in the part Groq keeps from one request to the next, which does not
+  // count against the minute's tokens once kept.
+  expect(sizes.staticPrefix).toBeLessThan(11_500);
+  expect(sizes.estimatedTokens).toBeLessThan(3_000);
   console.log(`request size: ${JSON.stringify(sizes)}`);
 });
 

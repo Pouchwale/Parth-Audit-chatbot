@@ -12,6 +12,7 @@ import type {
   Confirmation,
   ConfirmationPart,
   FileInfo,
+  ReplyLanguage,
   StreamEvent,
   UserMessage,
 } from '@shared/api.ts';
@@ -27,6 +28,7 @@ import { baseName } from '../files/names.ts';
 import { conversationFiles, fileInfo, storeFile } from '../files/store.ts';
 import { errorResponse, HttpError } from '../http.ts';
 import { openConversation, openInterrupted, type WorkingConversation } from './conversation.ts';
+import { fixedReply, turnLanguage, type TurnLanguage } from './language.ts';
 import { explainGroqError, isRequestTooLarge, TURN_WAIT_MS, type ModelRequest, type Tool, type ToolMessage, type WaitBudget } from './model.ts';
 import { CHANGE_MARK, systemPrompt, turnContext } from './prompt.ts';
 import { titleFor } from './titles.ts';
@@ -59,6 +61,8 @@ export interface Turn {
   username: string;
   displayName: string;
   timeZone: string | undefined;
+  /** The language the person chose for replies in the app's settings. Missing means "auto". */
+  replyLanguage?: ReplyLanguage | undefined;
   /** Set when the client asked for the reply as a stream of events. */
   stream?: TurnStream | undefined;
   /** What the request cost the server so far, for its log line. Set once it holds its conversation. */
@@ -211,13 +215,8 @@ export async function decide(
         const why = decision === 'cancel' ? 'cancelled' : 'expired';
         await dropPending(turn, conv, pending, why);
         reply.put(shown.part);
-        return {
-          reply:
-            why === 'cancelled'
-              ? "Okay, I didn't change anything."
-              : "That request expired, so I didn't change anything. Ask me again if you still want it.",
-          confirmation: null,
-        };
+        // Said in the conversation's language: a tap on a card keeps it.
+        return { reply: fixedReply(why, turn.replyLanguage, languageOf(conv, pending.request)), confirmation: null };
       },
     };
   });
@@ -330,11 +329,22 @@ async function runModel(turn: Turn, conv: WorkingConversation, reply: MessageWri
   const files = conversationFiles(deps, turn.userId, conv.id);
   // All the waiting for a busy model that this turn may do, across its model calls.
   const wait: WaitBudget = { leftMs: TURN_WAIT_MS };
+  // What the request is written in: the note tells the model when it is Gujarati or Hindi, and the server's own
+  // sentences below are said in it.
+  const language = languageOf(conv, request);
 
   for (let calls = 0; calls < MAX_MODEL_CALLS; calls++) {
     reply.beginResponse();
     const { messages: history, trimmed } = windowOf(conv.messages, deps.config.historyChars);
-    const context = turnContext({ displayName: turn.displayName, username: turn.username, now: new Date(), timeZone: turn.timeZone, trimmed });
+    const context = turnContext({
+      displayName: turn.displayName,
+      username: turn.username,
+      now: new Date(),
+      timeZone: turn.timeZone,
+      trimmed,
+      replyLanguage: turn.replyLanguage,
+      language,
+    });
     const messages = modelMessages(history, attached, deps.config.fileTextChars);
     const completion = await callModel(turn, { system, context, tools, messages }, reply, wait);
     if (!completion) return stopped(conv, reply);
@@ -343,7 +353,7 @@ async function runModel(turn: Turn, conv: WorkingConversation, reply: MessageWri
       // A tool call may be cut off, so nothing runs and the partial response is dropped, its text too.
       turn.log.warn({ finishReason: choice?.finish_reason }, 'model response was incomplete');
       reply.discardResponse();
-      return say(conv, reply, "Sorry, I couldn't work that out. Could you say it more simply?");
+      return say(conv, reply, fixedReply('unclear', turn.replyLanguage, language));
     }
     const { content, tool_calls: toolCalls = [], reasoning } = choice.message;
     // A model that doesn't stream (such as the tests' scripted one) hands over its text at the end.
@@ -375,7 +385,16 @@ async function runModel(turn: Turn, conv: WorkingConversation, reply: MessageWri
     }
     conv.messages.push(...results);
   }
-  return say(conv, reply, "Sorry, I couldn't finish that. Could you try it in smaller steps?");
+  return say(conv, reply, fixedReply('unfinished', turn.replyLanguage, language));
+}
+
+/**
+ * What the request a turn answers is written in (language.ts), or for a bare yes or no, the person's latest earlier
+ * message that has a language.
+ */
+function languageOf(conv: WorkingConversation, request: string): TurnLanguage | null {
+  const said = conv.messages.flatMap((message) => (message.role === 'user' && typeof message.content === 'string' ? [message.content] : []));
+  return turnLanguage(request, said.reverse());
 }
 
 const SIGNED_OUT = 'Not run: the sign-in to the connected system has expired.';

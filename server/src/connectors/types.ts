@@ -15,6 +15,11 @@ export interface Connector {
   actions: readonly Action[];
   /** Two to four short requests people can try, shown on the app's welcome screen. */
   examples?: readonly string[];
+  /**
+   * Words people say about this system that a voice recording's text must spell as written here, such as its short
+   * name and its kind of format numbers ("DCRS", "F/QC/30"). Whisper is shown them (voice/transcriber.ts).
+   */
+  spokenTerms?: readonly string[];
   /** Checks a person's username and password with this system and returns their account and credentials. */
   authenticate(username: string, password: string): Promise<ConnectorAccount>;
   /** Best-effort sign-out with the system when a session ends. */

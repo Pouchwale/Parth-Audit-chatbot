@@ -16,7 +16,8 @@ const Env = z.object({
   GROQ_REASONING_EFFORT: z.enum(['', 'low', 'medium', 'high']).default('medium'),
   GROQ_FALLBACK_MODEL: z.string().optional(),
   GROQ_TITLE_MODEL: z.string().default('openai/gpt-oss-20b'),
-  GROQ_TRANSCRIPTION_MODEL: z.string().default('whisper-large-v3-turbo'),
+  // Not the turbo: people speak Gujarati and Hindi as well as English (see server/.env.example).
+  GROQ_TRANSCRIPTION_MODEL: z.string().default('whisper-large-v3'),
   GROQ_VISION_MODEL: z.string().default('qwen/qwen3.8-27b'),
   FILE_MAX_MB: z.coerce.number().positive().default(20),
   FILE_TEXT_CHARS: z.coerce.number().int().positive().default(16_000),
@@ -52,7 +53,7 @@ export interface Config {
   fallbackModel: string | undefined;
   /** Names new conversations. */
   titleModel: string;
-  /** Turns voice recordings into text. */
+  /** Turns voice recordings into text, in whichever of English, Gujarati and Hindi was spoken. */
   transcriptionModel: string;
   /** Reads the photos people attach. It must accept images; the chat models don't. */
   visionModel: string;

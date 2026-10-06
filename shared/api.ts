@@ -39,6 +39,18 @@ export interface LoginResponse {
   user: CurrentUser;
 }
 
+/**
+ * The language Mitra answers in, from the app's settings ("Mitra replies in"). Every request that runs a turn
+ * (message, edit, decision, retry) carries it.
+ * - auto, the default when it is left out: the language and script of the person's latest message. People write
+ *   English, Gujarati in Gujarati script or in Latin letters ("aaje nu record kholo"), Hindi in Devanagari or in Latin
+ *   letters ("aaj ka record kholo"), or a mix. A bare yes or no, or a tap on a card, keeps the conversation's language.
+ * - en, gu, hi: always English, Gujarati in Gujarati script, or Hindi in Devanagari, whatever the person writes in.
+ * In every language, numbers and dates keep the digits 0-9, and format numbers (F/QC/30), record ids, field keys and
+ * values stay exactly as the connected system writes them. Any other value is refused with 400 invalid_request.
+ */
+export type ReplyLanguage = 'auto' | 'en' | 'gu' | 'hi';
+
 export interface MessageRequest {
   /** Omit to start a new conversation. */
   conversationId?: string;
@@ -49,6 +61,8 @@ export interface MessageRequest {
   stream?: boolean;
   /** Ids of files uploaded with POST /assistant/files for this message (at most 20). */
   attachments?: string[];
+  /** The language to answer in (see ReplyLanguage). */
+  replyLanguage?: ReplyLanguage;
 }
 
 // ── Files ────────────────────────────────────────────────────────────────────────────────────────
@@ -105,6 +119,8 @@ export interface EditMessageRequest {
    * keep the message's files as they are; send [] to take them all off.
    */
   attachments?: string[];
+  /** The language to answer in (see ReplyLanguage). */
+  replyLanguage?: ReplyLanguage;
 }
 
 /**
@@ -120,12 +136,16 @@ export interface DecisionRequest {
   decision: 'confirm' | 'cancel';
   timeZone?: string;
   stream?: boolean;
+  /** The language to answer in (see ReplyLanguage). A cancelled card's "I didn't change anything" is said in it too. */
+  replyLanguage?: ReplyLanguage;
 }
 
 /** Continues a turn that ended in an error, from where it stopped. */
 export interface RetryRequest {
   timeZone?: string;
   stream?: boolean;
+  /** The language to answer in (see ReplyLanguage). */
+  replyLanguage?: ReplyLanguage;
 }
 
 export interface PendingChange {

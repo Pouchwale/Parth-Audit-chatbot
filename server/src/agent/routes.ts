@@ -7,11 +7,14 @@ import { MAX_ATTACHMENTS } from '../files/attachments.ts';
 import { errorResponse, parseBody } from '../http.ts';
 import { eventStream } from '../sse.ts';
 import { decide, editMessage, retry, sendMessage, signInExpired, type Turn, type TurnResult, type TurnStream } from './agent.ts';
+import { REPLY_LANGUAGES } from './language.ts';
 
 const TURNS_PER_MINUTE = 20;
 
 const Text = z.string().trim().min(1).max(4000);
 const Attachments = z.array(z.uuid()).max(MAX_ATTACHMENTS, `A message can carry at most ${MAX_ATTACHMENTS} files.`);
+/** The language to answer in, from the app's settings (ReplyLanguage in shared/api.ts). */
+const Language = z.enum(REPLY_LANGUAGES);
 
 const MessageBody = z.object({
   conversationId: z.uuid().optional(),
@@ -19,6 +22,7 @@ const MessageBody = z.object({
   timeZone: z.string().max(100).optional(),
   stream: z.boolean().optional(),
   attachments: Attachments.optional(),
+  replyLanguage: Language.optional(),
 }) satisfies z.ZodType<MessageRequest>;
 
 const EditBody = z.object({
@@ -26,6 +30,7 @@ const EditBody = z.object({
   timeZone: z.string().max(100).optional(),
   stream: z.boolean().optional(),
   attachments: Attachments.optional(),
+  replyLanguage: Language.optional(),
 }) satisfies z.ZodType<EditMessageRequest>;
 
 const DecisionBody = z.object({
@@ -33,11 +38,13 @@ const DecisionBody = z.object({
   decision: z.enum(['confirm', 'cancel']),
   timeZone: z.string().max(100).optional(),
   stream: z.boolean().optional(),
+  replyLanguage: Language.optional(),
 }) satisfies z.ZodType<DecisionRequest>;
 
 const RetryBody = z.object({
   timeZone: z.string().max(100).optional(),
   stream: z.boolean().optional(),
+  replyLanguage: Language.optional(),
 }) satisfies z.ZodType<RetryRequest>;
 
 export const ConversationParams = z.object({ conversationId: z.uuid() });
@@ -84,14 +91,14 @@ async function answer(
   deps: AppDeps,
   request: FastifyRequest,
   reply: FastifyReply,
-  options: { timeZone?: string | undefined; stream?: boolean | undefined },
+  options: TurnOptions & { stream?: boolean | undefined },
   run: (turn: Turn) => Promise<TurnResult>,
 ): Promise<AssistantReply | undefined> {
-  if (!options.stream) return result(deps, request, await run(turnFor(deps, request, options.timeZone)));
+  if (!options.stream) return result(deps, request, await run(turnFor(deps, request, options)));
 
   const events = eventStream(reply);
   try {
-    const finished = await run(turnFor(deps, request, options.timeZone, events));
+    const finished = await run(turnFor(deps, request, options, events));
     events.send({ type: 'done', reply: await result(deps, request, finished) });
   } catch (error) {
     // The conversation lookup and checks run before the stream starts, so their errors are still plain JSON.
@@ -105,7 +112,13 @@ async function answer(
   return undefined;
 }
 
-function turnFor(deps: AppDeps, request: FastifyRequest, timeZone: string | undefined, stream?: TurnStream): Turn {
+/** What every request that runs a turn may say about how to answer. */
+interface TurnOptions {
+  timeZone?: string | undefined;
+  replyLanguage?: Turn['replyLanguage'];
+}
+
+function turnFor(deps: AppDeps, request: FastifyRequest, { timeZone, replyLanguage }: TurnOptions, stream?: TurnStream): Turn {
   const { user, session } = authOf(request);
   return {
     deps,
@@ -115,6 +128,7 @@ function turnFor(deps: AppDeps, request: FastifyRequest, timeZone: string | unde
     username: user.username,
     displayName: user.displayName,
     timeZone,
+    replyLanguage,
     stream,
   };
 }

@@ -5,6 +5,7 @@
 // gpt-oss's tokenizer; Groq renders the tools as signatures rather than JSON, which is shorter than what is counted
 // here. The orchestrator's count_tokens.py gives the exact o200k_base count for the file this writes.
 import { writeFileSync } from 'node:fs';
+import type { ReplyLanguage } from '@shared/api.ts';
 import { toolDefinitions } from '../src/agent/agent.ts';
 import { wireMessages, type ModelRequest } from '../src/agent/model.ts';
 import { systemPrompt, turnContext } from '../src/agent/prompt.ts';
@@ -19,6 +20,8 @@ export interface Person {
   username: string;
   now: Date;
   timeZone: string;
+  /** The language they chose for replies in the app's settings. */
+  replyLanguage?: ReplyLanguage;
 }
 
 /** The request the server sends for `person` asking `history`, against a DCRS connector. */

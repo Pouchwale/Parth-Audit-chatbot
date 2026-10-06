@@ -51,7 +51,9 @@ export function createDemoConnector(): Connector {
     id: 'demo',
     name: 'Demo Records',
     description: 'Sample audit findings and daily pest control reports for trying the assistant. Not a real system.',
-    examples: ['What findings are still open?', 'Close F-101, the pallets were moved', "Get yesterday's pest control report", 'Show me the closed findings'],
+    // One in Gujarati and one in Hindi, so people see they can ask in their own language.
+    examples: ['What findings are still open?', 'F-101 બંધ કરો, પેલેટ ખસેડી દીધા છે', "Get yesterday's pest control report", 'बंद findings दिखाओ'],
+    spokenTerms: ['F-101', 'CAPA'],
     actions: [
       defineAction({
         name: 'list_findings',

@@ -23,7 +23,9 @@ export function createDcrsConnector(options: DcrsOptions): Connector {
     name: 'Digital Controlled Record System',
     description:
       "The plant's controlled documents (formats such as F/QC/05 or F/HR/17), the records filled in on them, CAPA findings, customer complaints and the daily pest control report, as the person's own DCRS account sees them. Dates are the factory's days, YYYY-MM-DD. A record is named by its recordId, or by its documentId (the id, a format number such as F-QC-30, or the document's name) and date, today if left out: no lookup first. A change to a day's record not started yet starts it first. To fill in a record: get_record or open_record for its field keys, edit_record, then record_action submit.",
-    examples: ['What is due today?', "Start today's pest control record", 'Show the open CAPA findings', "Print yesterday's pest control report"],
+    // One in Gujarati and one in Hindi, so people see they can ask in their own language.
+    examples: ['What is due today?', 'આજનો પેસ્ટ કંટ્રોલ રેકોર્ડ શરૂ કરો', 'खुले CAPA findings दिखाओ', "Print yesterday's pest control report"],
+    spokenTerms: ['DCRS', 'Gujarat Print Pack', 'Mehsana', 'F/QC/30', 'F/HR/17', 'CAPA'],
     actions: [...documentActions(dcrs), ...plantActions(dcrs), ...recordActions(dcrs), ...findingActions(dcrs)],
     authenticate: (username, password) => dcrs.signIn(username.trim(), password),
     signOut: async (credentials) => dcrs.signOut(tokenOf(credentials)),
