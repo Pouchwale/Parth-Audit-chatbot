@@ -103,6 +103,7 @@ Route modules load with the app rather than on first use. Expo can split a web b
 | `mobile/` | Expo (React Native) app: sign-in, voice and text assistant, super admin screens |
 | `server/` | Node + TypeScript API: sessions, login and action logs, connectors, agent |
 | `shared/api.ts` | The HTTP contract, as types shared by the app and the server |
+| `mobile/eas.json`, `.easignore` | Building the Android app on Expo's servers, and what is uploaded for it ([Installing Mitra on Android](#installing-mitra-on-android)) |
 
 ## Run and check it
 
@@ -141,7 +142,7 @@ Then run `npm run dev`. In development the server uses an embedded Postgres (PGl
 
 ### On a phone
 
-People use Mitra in **Expo Go**, Expo's free app: from the Play Store on Android phones, and the App Store on iPhones. Nothing else is installed or built: no APK, no TestFlight. The app is on Expo SDK 57, which is what Expo Go from both stores opens (Expo Go 57.0.9, 2 September 2026). Expo Go opens one SDK, the latest. When Expo releases the next SDK, the stores' Expo Go moves to it, and the app must be upgraded with `npx expo install expo@^<that SDK>.0.0 --fix`, then `npx expo install --fix` and `npx expo-doctor`, before phones update Expo Go.
+People use Mitra in **Expo Go**, Expo's free app: from the Play Store on Android phones, and the App Store on iPhones. Android phones can instead install Mitra as an app of its own, an .apk built on Expo's servers that then updates itself (see [Installing Mitra on Android](#installing-mitra-on-android)); iPhones stay on Expo Go, with no TestFlight. The app is on Expo SDK 57, which is what Expo Go from both stores opens (Expo Go 57.0.9, 2 September 2026). Expo Go opens one SDK, the latest. When Expo releases the next SDK, the stores' Expo Go moves to it, and the app must be upgraded with `npx expo install expo@^<that SDK>.0.0 --fix`, then `npx expo install --fix` and `npx expo-doctor`, before phones update Expo Go.
 
 **On the computer that runs the Mitra server** (the plant's server PC):
 
@@ -154,9 +155,51 @@ People use Mitra in **Expo Go**, Expo's free app: from the Play Store on Android
 
 - **iPhone, local network.** Expo Go asks to "find and connect to devices on your local network" the first time. Tap **Allow**: without it the phone can reach neither Expo nor the Mitra server. To change it later: Settings, Privacy & Security, Local Network, Expo Go.
 - **Microphone and camera.** In Expo Go these are Expo Go's permissions, asked for Expo Go (on an iPhone in its words, "Allow Expo projects to access your microphone"). Allow them for voice and for photos. To change them later: in the phone's Settings, under Expo Go (on Android: Apps, Expo Go, Permissions). If one was refused, Mitra says to allow it for Expo Go. Photos, files and folders are picked with the phone's own pickers and need no permission, and the share sheet needs none.
-- **Finding the server.** The app finds the server on its own: port 3000 on the computer whose address is in the QR code (`mobile/src/lib/server-address.ts`). If it can't reach it, it says so with that address, and asks the person to try again, check the company Wi-Fi, then ask their administrator. You only need `EXPO_PUBLIC_API_URL` (see `mobile/.env.example`) when the server lives somewhere else.
+- **Finding the server.** In Expo Go the app finds the server on its own: port 3000 on the computer whose address is in the QR code (`mobile/src/lib/server-address.ts`). If it can't reach it, it says so with that address, and asks the person to try again, check the company Wi-Fi, then ask their administrator. You only need `EXPO_PUBLIC_API_URL` (see `mobile/.env.example`) when the server lives somewhere else. The installed Android app has no QR code to go by, so it asks for the address instead (see [Installing Mitra on Android](#installing-mitra-on-android)).
 
 Everything works in Expo Go, voice included: the app records you, the server turns the recording into text, and replies can be read aloud. Plain http is fine there: Expo Go allows it on both Android and iPhone. For trying it on your own computer, `npm run demo` (or `npm run dev`) also shows a QR code for Expo Go in the terminal.
+
+### Installing Mitra on Android
+
+Android phones can also install Mitra as an app of its own, instead of opening it in Expo Go. It is built on Expo's servers (EAS Build, the free plan) as an .apk file that staff download and install. iPhones stay on Expo Go: an iPhone app of its own needs Apple's paid developer program.
+
+**On each Android phone, once:**
+
+1. Open the download link your administrator shares, on the phone, and download Mitra (an .apk file).
+2. Open the downloaded file. Android asks whether to allow installing apps from there (the browser, or Files): tap **Settings**, turn on **Allow from this source**, go back and tap **Install**. If Google Play Protect warns about an app it doesn't know, tap **More details**, then **Install anyway**: Mitra is the plant's own app and is not in the Play Store.
+3. Join the company Wi-Fi and open Mitra. The first time, it asks for **the Mitra server's address**: the address of the server PC, for example `192.168.62.195` (port 3000 is assumed; a full address such as `http://192.168.62.195:3000` works too). Tap **Continue**. Mitra checks that its server answers there before it saves the address; if it can't reach one, it says so and nothing is saved.
+4. Sign in with your DCRS email and password, as in Expo Go.
+
+The microphone and the camera are asked for by Mitra itself the first time they are used (in Expo Go they were Expo Go's). To change them later: the phone's Settings, Apps, Mitra, Permissions.
+
+**When the server PC's address changes** (it is different on another network): on the sign-in screen, tap **Change server**; when signed in, go to **Settings**, **About**, **Change server**. The new address is checked first. Changing it in Settings signs you out of the old server, and you sign in again on the new one. **Settings**, **About** always shows the server in use.
+
+**Updates arrive by themselves.** A change to the app's own code (its screens, words and behaviour) reaches the installed phones without a new download: each time Mitra opens, it checks for an update and downloads it in the background, and uses it the next time it is opened. **Settings**, **About**, **Last update** shows the date of the update it is running ("None yet" for the one it was installed with); when a newer one has been downloaded, it says so there with a **Restart Mitra** button. Only a change to the native side of the app needs a new .apk: a new Expo SDK, a new package with native code, a new permission, or the app's name, icon or splash screen. Staff install a new .apk over the old one, the same way, and keep their server address and sign-in.
+
+**Plain http on the plant network.** The Mitra server answers plain http on the company network. Android blocks plain http in an installed app unless the app declares it, so the build turns on `usesCleartextTraffic` (expo-build-properties, in `mobile/app.json`). Nothing else is loosened, and Expo Go already allowed it.
+
+**For the administrator: building and publishing.** The app is the Mitra project on expo.dev (project ID `4add7f19-7318-43c1-be5c-efb24f28e6ab`, `extra.eas.projectId` in `mobile/app.json`; build settings in `mobile/eas.json`). Install EAS CLI once with `npm install --global eas-cli`, sign in with `eas login`, and run every command below **from `mobile/`**:
+
+| Command | What it does |
+|---|---|
+| `eas init --id 4add7f19-7318-43c1-be5c-efb24f28e6ab` | Once: links this folder to the Mitra project and writes the Expo account into `app.json` as `owner`. Commit that change. |
+| `eas build --platform android --profile preview` | Builds the .apk on Expo's servers. On the free plan a build may wait in a queue first. The first build asks to generate the app's signing key: answer yes, and let Expo keep it. Every later .apk must be signed with the same key to install over the old one, so never delete it on expo.dev. At the end it prints a link and a QR code to download the .apk; the build's page on expo.dev (Builds) has the same. Anyone with the link can download it: share it with staff. |
+| `eas update --channel preview --environment preview --platform android --message "What changed"` | Publishes the app's code as it is in this folder to every installed phone. No new .apk. It bundles the app on this computer, so it reads `mobile/.env` if there is one: leave `EXPO_PUBLIC_API_URL` out of it. |
+
+**Update, or a new .apk?** An update reaches only the .apk builds with the same runtime version, and the runtime version is the app's `version` in `mobile/app.json` (`"runtimeVersion": { "policy": "appVersion" }`). So:
+
+- A change in `mobile/src` (screens, words, behaviour), or in `shared/`: publish an update. Keep `version` as it is.
+- A native change (anything in `mobile/package.json` with native code, the `plugins`, permissions, name, icon or splash in `mobile/app.json`, or a new Expo SDK): raise `version` (1.0.0 to 1.1.0) **and** `android.versionCode` (1 to 2) in `mobile/app.json`, commit, run `eas build --platform android --profile preview`, and share the new link. Updates published from then on reach the new .apk; the old .apk gets none of them, so everyone should install the new one. `npx expo install --check` and `npx expo-doctor` should pass before a build.
+
+The versions are kept in `mobile/app.json` (`"appVersionSource": "local"` in `eas.json`), so the code and the build always say the same thing.
+
+**A default address in the build.** The `preview` profile sets no `EXPO_PUBLIC_API_URL`, so the app asks for the address the first time it opens: the server PC's address changes between networks, and a phone that asks is clearer than one that tries an old address. To give a build an address to start from, add `"env": { "EXPO_PUBLIC_API_URL": "192.168.62.195" }` to the `preview` profile in `eas.json` before building (an address typed on the phone still wins over it). An empty value is refused by EAS: leave the line out instead.
+
+**What is uploaded.** EAS uploads this repository from its root, minus what `.easignore` (in the repository's root) leaves out: packages, `.env` files, the server and its data, build output and the generated `android/` and `ios/` folders. EAS makes `android/` itself from `mobile/app.json` at each build (`npx expo prebuild`). The build needs `mobile/` and `shared/` (the app imports types from `shared/api.ts`).
+
+**`eas.json`'s `production` profile** builds an app bundle (.aab) for the Play Store, on the `production` update channel, for when Mitra goes there.
+
+**Testing the server address screen in a browser.** The web build finds its server from the page, as before. Bundled with `EXPO_PUBLIC_ASK_FOR_SERVER=1` it asks for the address as the installed app does: `EXPO_PUBLIC_ASK_FOR_SERVER=1 npx expo export --platform web`, served from any static server.
 
 ### Tests
 
@@ -272,9 +315,10 @@ Going over a limit returns "Too many attempts. Wait a minute and try again."
 
 - Done: the server, logging, super admin view, agent with confirmations, and the mobile app. Try them with `npm run demo`.
 - Done: the DCRS connector ([The DCRS connector](#the-dcrs-connector)). `npm run server` signs people in with DCRS once `DCRS_BASE_URL` is set.
-- New from 2 to 6 October 2026:
+- New from 2 to 7 October 2026:
   - **Gujarati asked, Gujarati answered**: Mitra answers in the language and script it was asked in (English, Gujarati, Hindi), or always in the one chosen in Settings, and reads replies aloud with each language's own voice, the most natural the phone has ([Languages and the voice](#languages-and-the-voice)). Voice recordings now go to `whisper-large-v3` by default.
   - **`npm run phones`**: Mitra in Expo Go on Android phones and iPhones, from the plant's server PC ([On a phone](#on-a-phone)).
+  - **Mitra as an Android app**: an .apk built with EAS Build that asks for the server's address once and updates itself with EAS Update ([Installing Mitra on Android](#installing-mitra-on-android)).
   - **Faster on low-end phones**: replies drawn block by block, and only the row that changed drawn again ([Fast on low-end phones](#fast-on-low-end-phones)).
   - **The edit pen** under every message a person sent ([Editing a message](#editing-a-message)).
   - **The waiting notice**: when Groq's limits make the model wait, the reply says so and counts down, instead of going quiet; past a minute it fails with "Try again in ..." and Retry continues it ([Model](#model)).
