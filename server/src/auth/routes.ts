@@ -55,16 +55,18 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AppDeps) {
 
     const now = new Date();
     const token = newSessionToken();
+    const systemAdmin = account.systemAdmin === true;
     const expiresAt = new Date(Math.min(now.getTime() + deps.config.sessionTtlMs, account.expiresAt?.getTime() ?? Infinity));
 
     const { user, replaced } = await deps.db.transaction(async (tx) => {
       const user = one(
         await tx
           .insert(users)
-          .values({ provider: connector.id, externalId: account.externalId, username: account.username, displayName: account.displayName, lastLoginAt: now })
+          .values({ provider: connector.id, externalId: account.externalId, username: account.username, displayName: account.displayName, lastLoginAt: now, systemAdmin })
           .onConflictDoUpdate({
             target: [users.provider, users.externalId],
-            set: { username: account.username, displayName: account.displayName, lastLoginAt: now },
+            // What the system says at this sign-in replaces what it said before: a role taken away stops counting now.
+            set: { username: account.username, displayName: account.displayName, lastLoginAt: now, systemAdmin },
           })
           .returning(),
       );

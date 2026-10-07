@@ -22,12 +22,16 @@ declare module 'fastify' {
   }
 }
 
-export function roleOf(config: Config, username: string): Role {
-  return config.superAdmins.has(username.toLowerCase()) ? 'super_admin' : 'user';
+/**
+ * A super admin of this app: the connected system's own administrator as it said at the person's last sign-in (DCRS's
+ * super admin), or anybody SUPER_ADMINS lists.
+ */
+export function roleOf(config: Config, user: Pick<UserRow, 'username' | 'systemAdmin'>): Role {
+  return user.systemAdmin || config.superAdmins.has(user.username.toLowerCase()) ? 'super_admin' : 'user';
 }
 
 export function currentUser(config: Config, user: UserRow): CurrentUser {
-  return { id: user.id, username: user.username, displayName: user.displayName, role: roleOf(config, user.username) };
+  return { id: user.id, username: user.username, displayName: user.displayName, role: roleOf(config, user) };
 }
 
 export function activeSession(now: Date) {
@@ -58,7 +62,7 @@ export function requireSession(deps: AppDeps) {
       row.session.lastSeenAt = now;
       row.session.lastIp = ip;
     }
-    request.auth = { ...row, role: roleOf(deps.config, row.user.username) };
+    request.auth = { ...row, role: roleOf(deps.config, row.user) };
   };
 }
 

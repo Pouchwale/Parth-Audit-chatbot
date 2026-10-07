@@ -35,6 +35,12 @@ export interface ConnectorAccount {
   credentials: unknown;
   /** When the credentials stop working, if the system says. */
   expiresAt?: Date | null;
+  /**
+   * The system itself says this person is its administrator (DCRS's super admin, role "admin" in its own answer at
+   * this sign-in). Such a person is this app's super admin too, beside SUPER_ADMINS. Read again at every sign-in, so a
+   * role taken away in the system stops counting at the person's next sign-in.
+   */
+  systemAdmin?: boolean;
 }
 
 /** read: runs straight away. write: changes data, so the person always confirms it first. */

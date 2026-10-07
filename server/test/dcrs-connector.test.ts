@@ -62,6 +62,8 @@ const summaryOf = (said: string | Described<unknown>) => (typeof said === 'strin
 
 /** F/HR/17 as GET /api/v1/documents/daily-pest-monitoring answers. */
 const PEST_DOC = { id: 'daily-pest-monitoring', formatNo: 'F/HR/17', name: 'Daily Pest Control Monitoring Record', kind: 'daily-pest-monitoring' };
+/** DCRS's answer to GET /api/v1/records for one document and one day: the document, the day DCRS read "today" as, and no record yet. */
+const dayAnswer = (document: object, day: string) => ({ document, from: day, to: day, total: 0, records: [] });
 
 const WRITES = ['open_record', 'edit_record', 'record_action', 'add_photo_to_record', 'fill_record_with_sample_data', 'close_finding'];
 
@@ -120,12 +122,27 @@ group('signing in', () => {
       displayName: 'Kapila Barad',
       credentials: { token: TOKEN },
       expiresAt: new Date(NOW + 30_600_000),
+      systemAdmin: false,
     });
     expect(seen.map((r) => `${r.method} ${r.path}`)).toEqual(['POST /api/auth/login', 'GET /api/v1/me']);
     expect(seen[0]!.body).toEqual({ email: 'kapila.barad@gpp.local', password: 'SeedQA@2026' });
     expect(seen[0]!.headers['x-client-name']).toBe('Mitra mobile app');
     expect(seen[0]!.headers.authorization).toBeUndefined();
     expectSentAsThePerson(seen[1]!);
+  });
+
+  it("knows DCRS's super admin by the role DCRS answers at this sign-in, never by anything the person typed", async () => {
+    const as = async (me: Record<string, unknown>, typed = 'admin@gpp.local') => {
+      const { connector } = standInDcrs({ 'GET /api/v1/me': () => json(200, me) });
+      return (await connector.authenticate(typed, 'pw')).systemAdmin;
+    };
+    expect(await as({ ...ME, email: 'admin@gpp.local', name: 'Super Admin', role: 'admin' })).toBe(true);
+    // A role taken away in DCRS: the next sign-in says so.
+    expect(await as({ ...ME, email: 'admin@gpp.local', name: 'Super Admin', role: 'staff' })).toBe(false);
+    // No role in the answer, or another word for it: not the super admin, whatever address was typed.
+    expect(await as({ ...ME, email: 'admin@gpp.local' }, 'admin@gpp.local')).toBe(false);
+    expect(await as({ ...ME, role: 'Admin' })).toBe(false);
+    expect(await as({ ...ME, role: 'staff' }, 'admin')).toBe(false);
   });
 
   it("takes the session's end from the cookie's Expires, or the earlier of the cookie and DCRS's endsAt", async () => {
@@ -159,7 +176,7 @@ group('signing in', () => {
   });
 
   it("refuses in DCRS's own words outside working hours, for a switched-off account and after too many attempts", async () => {
-    const closed = 'DCRS is open 8:40 am to 6:20 pm on working days. Today is Thursday, the weekly off — it opens again on Friday 2 October at 8:40 am.';
+    const closed = 'Staff working hours: 8:40 am to 6:20 pm on working days. Today is Thursday, the weekly off; staff hours start again on Friday 2 October at 8:40 am.';
     await refusedWith(() => refusal(403, 'outside-working-hours', closed, { opensAt: '2026-10-02T03:10:00.000Z' }), 'forbidden', closed);
     await refusedWith(() => json(403, { error: 'This account has been switched off. Ask the administrator.' }), 'forbidden', 'This account has been switched off. Ask the administrator.');
     await refusedWith(() => json(429, { error: 'Too many failed attempts. Try again in a few minutes.' }), 'forbidden', 'Too many failed attempts. Try again in a few minutes.');
@@ -227,7 +244,15 @@ const TODAY = {
   needsInput: [{ ...LIST_ITEM, problems: ['Line No. is required'] }],
   awaitingVerification: [],
   facts: 'Today is Wednesday 30 September 2026, a working day.',
-  workingHours: { enforced: true, start: '08:40', end: '18:20', hoursText: 'DCRS is open 8:40 am to 6:20 pm on working days.', todayText: 'Today is a working day — open now, until 6:20 pm.' },
+  workingHours: {
+    enforced: true,
+    start: '08:40',
+    end: '18:20',
+    hoursText: 'Staff working hours: 8:40 am to 6:20 pm on working days. The super admin can sign in at any time.',
+    todayText: 'Today is a working day — staff hours run until 6:20 pm.',
+    heldToHours: true,
+    forYou: null,
+  },
 };
 
 // Every action but the ones that hand over files or take a photo: what it sends, and what the model is given.
@@ -676,6 +701,7 @@ group('what the person is asked to confirm', () => {
     const { connector } = standInDcrs({
       'GET /api/v1/documents/daily-pest-monitoring': () => json(200, PEST_DOC),
       'GET /api/v1/documents/F-QC-15-A': () => json(200, DOC_BRIEF),
+      'GET /api/v1/records': (r) => json(200, dayAnswer(r.query.documentId === 'daily-pest-monitoring' ? PEST_DOC : DOC_BRIEF, r.query.from === 'today' ? '2026-09-30' : r.query.from!)),
     });
     const action = actionOf(connector.actions, name);
     return summaryOf(await action.describe(action.input.parse(input), ctx));
@@ -747,7 +773,7 @@ group("DCRS's refusals", () => {
   });
 
   it("403 says why in DCRS's words: working hours, department, password", async () => {
-    const closed = 'DCRS is closed now: working hours ended at 6:20 pm. It opens again tomorrow, Thursday 1 October, at 8:40 am.';
+    const closed = 'Staff working hours: 8:40 am to 6:20 pm on working days. Today\'s staff hours ended at 6:20 pm; they start again on Friday 2 October at 8:40 am.';
     await refusedWith(() => refusal(403, 'outside-working-hours', closed, { opensAt: '2026-10-01T03:10:00.000Z' }), 'forbidden', closed);
     await refusedWith(
       () => refusal(403, 'not-your-department', 'The daily pest control reports belong to Human Resources, and this account is not kept to it.'),
@@ -1028,5 +1054,58 @@ group('naming a record by its document', () => {
       kind: 'forbidden',
       message: 'F/HR/17 is kept by Human Resources, not your department.',
     });
+  });
+});
+
+group('the super admin at any hour (DCRS REQUIREMENTS §84 addendum, 6-Oct-2026)', () => {
+  it("gives the model DCRS's line for the super admin with the staff's hours, so Mitra never tells him DCRS is closed", async () => {
+    const his = {
+      ...TODAY.workingHours,
+      todayText: "Today's staff hours ended at 6:20 pm; they start again on Friday 9 October at 8:40 am.",
+      heldToHours: false,
+      forYou: "You are the super admin: these are the staff's hours, and you can keep working at any time.",
+    };
+    const shaped = todayForModel({ ...TODAY, workingHours: his }) as { workingHours: Record<string, unknown> };
+    expect(shaped.workingHours).toEqual({ hoursText: his.hoursText, todayText: his.todayText, forYou: his.forYou });
+    // Staff's answer has no such line, and none is made up.
+    expect((todayForModel(TODAY) as { workingHours: Record<string, unknown> }).workingHours).toEqual({ hoursText: TODAY.workingHours.hoursText, todayText: TODAY.workingHours.todayText });
+  });
+
+  it("keeps the hours' sentences whole when the rest of a long day has to be cut short (the super admin sees every department)", () => {
+    const his = {
+      ...TODAY.workingHours,
+      todayText: "Today's staff hours ended at 12:09 pm; they start again on Friday 9 October at 6:00 am.",
+      heldToHours: false,
+      forYou: "You are the super admin: these are the staff's hours, and you can keep working at any time.",
+    };
+    const many = Array.from({ length: 40 }, (_, i) => ({ ...LIST_ITEM, recordId: `rec-${i}`, document: `A document with a long enough name to matter, number ${i}`, problems: ['Line No. is required'] }));
+    const shaped = todayForModel({ ...TODAY, workingHours: his, due: many, readyToSubmit: many, awaitingVerification: many }) as Record<string, unknown>;
+    expect(shaped.workingHours).toEqual({ hoursText: his.hoursText, todayText: his.todayText, forYou: his.forYou });
+    expect(JSON.stringify(shaped).length).toBeLessThanOrEqual(2_400 + 200);
+    expect(shaped.shortened ?? shaped.cutShort ?? shaped.leftOut).toBeTruthy();
+  });
+
+  it("opens the record of the day its card showed, even when the card is confirmed after DCRS's midnight", async () => {
+    let today = '2026-10-07';
+    const { connector, seen } = standInDcrs({
+      'GET /api/v1/records': (r) => json(200, dayAnswer(PEST_DOC, r.query.from === 'today' ? today : r.query.from!)),
+      'POST /api/v1/records': () => json(201, { created: true, record: RECORD }),
+    });
+    const open = actionOf(connector.actions, 'open_record');
+    const described = await open.describe(open.input.parse({ documentId: 'daily-pest-monitoring' }), ctx);
+    expect(summaryOf(described)).toBe("Open today's record of F/HR/17 Daily Pest Control Monitoring Record, starting it if there is none yet");
+    const card = (described as { input: Record<string, unknown> }).input;
+    expect(card).toEqual({ documentId: 'daily-pest-monitoring', date: '2026-10-07' });
+    // The card is confirmed after midnight: DCRS's today is now the 8th, but the day the card showed is what runs.
+    today = '2026-10-08';
+    await open.run(ctx, open.input.parse(card));
+    expect(seen.filter((r) => r.method === 'POST' && r.path === '/api/v1/records').map((r) => r.body)).toEqual([{ documentId: 'daily-pest-monitoring', date: '2026-10-07' }]);
+    // The fill step of the same card is pinned to the same day.
+    const fill = actionOf(connector.actions, 'fill_record_with_sample_data');
+    const filled = (await fill.describe(fill.input.parse({ documentId: 'daily-pest-monitoring' }), ctx)) as { input: Record<string, unknown> };
+    expect(filled.input).toMatchObject({ documentId: 'daily-pest-monitoring', date: '2026-10-08' });
+    // A date the person named stays theirs.
+    const named = (await open.describe(open.input.parse({ documentId: 'daily-pest-monitoring', date: '2026-10-01' }), ctx)) as { input: Record<string, unknown> };
+    expect(named.input).toEqual({ documentId: 'daily-pest-monitoring', date: '2026-10-01' });
   });
 });
