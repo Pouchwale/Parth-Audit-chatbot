@@ -63,6 +63,8 @@ interface Me {
   id?: unknown;
   name?: unknown;
   email?: unknown;
+  /** "admin" for DCRS's super admin, "staff" otherwise: DCRS reads it from its own accounts on every call. */
+  role?: unknown;
 }
 
 const UNREACHABLE = "DCRS couldn't be reached. Check that the DCRS server is running, then try again.";
@@ -133,9 +135,10 @@ export function dcrsClient(options: DcrsOptions) {
   }
 
   /**
-   * Checks an email and password with DCRS's own sign-in (POST /api/auth/login), then reads the person's stable id
-   * and name (GET /api/v1/me). The session token is the dcrs_session cookie; it lasts until the close of the day it
-   * was started, which is when the connector says the credentials stop working.
+   * Checks an email and password with DCRS's own sign-in (POST /api/auth/login), then reads the person's stable id,
+   * name and role (GET /api/v1/me). The session token is the dcrs_session cookie; it lasts until the close of the day
+   * it was started, which is when the connector says the credentials stop working. DCRS's super admin (role "admin",
+   * as DCRS answers it at this sign-in, never anything the person typed) is this app's super admin too.
    */
   async function signIn(email: string, password: string): Promise<ConnectorAccount> {
     const response = await call('POST', '/api/auth/login', { body: { email, password } });
@@ -161,6 +164,7 @@ export function dcrsClient(options: DcrsOptions) {
       displayName: typeof me.name === 'string' && me.name.trim() ? me.name.trim() : username,
       credentials: { token: session.token } satisfies DcrsCredentials,
       expiresAt: endsAt,
+      systemAdmin: me.role === 'admin',
     };
   }
 

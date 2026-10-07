@@ -130,20 +130,29 @@ const TODAY_LISTS = ['overdue', 'due', 'needsInput', 'readyToSubmit', 'awaitingV
 export function todayForModel(answer: unknown): unknown {
   if (!isObj(answer)) return fit(answer, BUDGET.list);
   const day = (value: unknown) => (isObj(value) ? pick(value, ['date', 'weekday', 'kind', 'name', 'label']) : value);
-  const hours = isObj(answer.workingHours) ? pick(answer.workingHours, ['hoursText', 'todayText']) : undefined;
-  const out: Obj = { ...pick(answer, ['date']), ...(answer.day ? { day: day(answer.day) } : {}), ...(hours && Object.keys(hours).length ? { workingHours: hours } : {}) };
+  // The staff's hours in DCRS's own words, and DCRS's line for the person asking when the hours do not hold them (the
+  // super admin: "these are the staff's hours, and you can keep working at any time"). A few sentences the model must
+  // have whole — cut to 80 characters, "The super admin can sign in at any time." became "The super admin can si…" — so
+  // they are kept out of the shortening, and the rest of the answer is fitted to the room they leave.
+  const picked = isObj(answer.workingHours) ? pick(answer.workingHours, ['hoursText', 'todayText', 'forYou']) : undefined;
+  const hours = picked && Object.keys(picked).length > 0 ? picked : undefined;
+  const budget = BUDGET.list - (hours ? size({ workingHours: hours }) : 0);
+  const out: Obj = { ...pick(answer, ['date']), ...(answer.day ? { day: day(answer.day) } : {}) };
   const said = notes();
   for (const key of TODAY_LISTS) {
     const items = list(answer[key]);
     if (items.length === 0) continue;
     const shown = key === 'upcoming' ? items.slice(0, 5) : items;
-    addWhileFits(out, key, tableOf(shown.map((item) => recordBrief(item, false)), items.length - shown.length), BUDGET.list, said);
+    addWhileFits(out, key, tableOf(shown.map((item) => recordBrief(item, false)), items.length - shown.length), budget, said);
   }
-  if (answer.tomorrow) addWhileFits(out, 'tomorrow', day(answer.tomorrow), BUDGET.list, said);
-  if (answer.weeklyOff) addWhileFits(out, 'weeklyOff', answer.weeklyOff, BUDGET.list, said);
-  if (Array.isArray(answer.nextHolidays)) addWhileFits(out, 'nextHolidays', table(answer.nextHolidays.slice(0, 4).map(day)), BUDGET.list, said);
-  if (typeof answer.facts === 'string') addWhileFits(out, 'facts', answer.facts, BUDGET.list, said);
-  return finish(out, said, BUDGET.list);
+  if (answer.tomorrow) addWhileFits(out, 'tomorrow', day(answer.tomorrow), budget, said);
+  if (answer.weeklyOff) addWhileFits(out, 'weeklyOff', answer.weeklyOff, budget, said);
+  if (Array.isArray(answer.nextHolidays)) addWhileFits(out, 'nextHolidays', table(answer.nextHolidays.slice(0, 4).map(day)), budget, said);
+  if (typeof answer.facts === 'string') addWhileFits(out, 'facts', answer.facts, budget, said);
+  const fitted = finish(out, said, budget);
+  if (!hours || !isObj(fitted)) return fitted;
+  const { date, day: today, ...rest } = fitted;
+  return { ...(date === undefined ? {} : { date }), ...(today === undefined ? {} : { day: today }), workingHours: hours, ...rest };
 }
 
 /** list_records and search_records: each record's id, date and status (and the search's snippet). */

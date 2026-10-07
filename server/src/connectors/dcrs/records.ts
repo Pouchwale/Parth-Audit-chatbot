@@ -129,9 +129,16 @@ export function recordActions(dcrs: DcrsClient) {
       kind: 'write',
       input: z.object({ documentId, date: isoDate.optional() }),
       describe: async (input, ctx) => {
-        // DCRS says which document the words name, so the card names it in full and the id is what runs.
-        const document = await names.document(ctx, input.documentId);
-        return { summary: `Open ${dayRecordWords(document.label, input.date)}, starting it if there is none yet`, input: { ...input, documentId: document.id } };
+        // DCRS says which document the words name and which day "today" is, so the card names the document in full and
+        // what runs is that document's record of that very day — as the steps that fill it are pinned to it
+        // (names.record). A card shown at 23:58 and confirmed after midnight still opens the day it showed, not the
+        // next one (only the super admin, never held to the staff's hours, works across midnight).
+        const day = await names.dayRecord(ctx, input.documentId, input.date);
+        const date = day.date ?? input.date;
+        return {
+          summary: `Open ${dayRecordWords(day.document.label, input.date)}, starting it if there is none yet`,
+          input: { ...input, documentId: day.document.id, ...(date ? { date } : {}) },
+        };
       },
       run: async (ctx, input) => {
         const answer = await dcrs.json('POST', '/api/v1/records', {

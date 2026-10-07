@@ -75,7 +75,7 @@ it('signs a person in with their DCRS account, keeping the session to the close 
 });
 
 it("turns a sign-in down in DCRS's own words outside working hours, and a wrong password as such", async () => {
-  const closed = 'DCRS is closed now: working hours ended at 6:20 pm. It opens again tomorrow at 8:40 am.';
+  const closed = 'Staff working hours: 8:40 am to 6:20 pm on working days. Today is Thursday, the weekly off; staff hours start again on Friday 2 October at 8:40 am.';
   const { login } = await start({ 'POST /api/auth/login': (r) => ((r.body as { password: string }).password === 'wrong' ? json(401, { error: 'Invalid email or password.' }) : refusal(403, 'outside-working-hours', closed)) });
   const refused = await login();
   expect(refused.statusCode).toBe(403);
@@ -90,6 +90,9 @@ it("answers a lookup at once, and starts today's record only once the person con
   const { login, as, dcrs, model } = await start({
     'GET /api/v1/today': () => json(200, { today: '2026-09-30', workingDay: true, due: [{ document: 'Daily Pest Control Monitoring Record', documentId: 'daily-pest-monitoring' }] }),
     'GET /api/v1/documents/daily-pest-monitoring': () => json(200, { id: 'daily-pest-monitoring', formatNo: 'F/HR/17', name: 'Daily Pest Control Monitoring Record' }),
+    // DCRS's day for "today", which the card is pinned to.
+    'GET /api/v1/records': () =>
+      json(200, { document: { id: 'daily-pest-monitoring', formatNo: 'F/HR/17', name: 'Daily Pest Control Monitoring Record' }, from: '2026-09-30', to: '2026-09-30', total: 0, records: [] }),
     'POST /api/v1/records': () => json(201, { recordId: 'rec-new', existed: false, status: 'Draft', date: '2026-09-30' }),
   });
   const token = (await login()).json<LoginResponse>().token;
@@ -106,15 +109,15 @@ it("answers a lookup at once, and starts today's record only once the person con
   expect(proposed.confirmation?.changes).toEqual([
     { system: 'Digital Controlled Record System', summary: "Open today's record of F/HR/17 Daily Pest Control Monitoring Record, starting it if there is none yet" },
   ]);
-  // Described by asking DCRS which document the words name; nothing started yet.
-  expect(dcrs.seen.filter((r) => r.path === '/api/v1/records')).toEqual([]);
-  expect(dcrs.seen.filter((r) => r.path === '/api/v1/documents/daily-pest-monitoring')).toHaveLength(1);
+  // Described by asking DCRS which document the words name and which day today is; nothing started yet.
+  expect(dcrs.seen.filter((r) => r.path === '/api/v1/records' && r.method === 'POST')).toEqual([]);
+  expect(dcrs.seen.filter((r) => r.path === '/api/v1/records' && r.method === 'GET')).toMatchObject([{ query: { documentId: 'daily-pest-monitoring', from: 'today', to: 'today' } }]);
 
   model.queue(says("Done. Today's record is started."));
   const done = await kapila.post(`/assistant/conversations/${proposed.conversationId}/decision`, { confirmationId: proposed.confirmation!.id, decision: 'confirm' });
   expect(done.json<AssistantReply>().reply).toBe("Done. Today's record is started.");
-  const started = dcrs.seen.filter((r) => r.path === '/api/v1/records');
-  expect(started).toMatchObject([{ method: 'POST', body: { documentId: 'daily-pest-monitoring' }, headers: { authorization: `Bearer ${TOKEN}`, 'x-client-name': 'Mitra mobile app' } }]);
+  const started = dcrs.seen.filter((r) => r.path === '/api/v1/records' && r.method === 'POST');
+  expect(started).toMatchObject([{ method: 'POST', body: { documentId: 'daily-pest-monitoring', date: '2026-09-30' }, headers: { authorization: `Bearer ${TOKEN}`, 'x-client-name': 'Mitra mobile app' } }]);
 
   const logged = await database.db.select({ action: actions.action, kind: actions.kind, status: actions.status }).from(actions);
   expect(logged).toEqual(
@@ -149,4 +152,35 @@ it("passes a refusal on in DCRS's words and carries on", async () => {
     role: 'tool',
     content: JSON.stringify({ error: 'HR Master Data belongs to Human Resources, and this account is not kept to it.' }),
   });
+});
+
+it("makes DCRS's super admin the app's super admin from DCRS's own answer, and stops at the next sign-in when DCRS says otherwise", async () => {
+  let role = 'admin';
+  const { app, as } = await start({
+    'GET /api/v1/me': () => json(200, { id: 'u-owner', name: 'Owner', email: 'owner@gpp.local', role, departments: [] }),
+  });
+  // Not in SUPER_ADMINS (the test's list has admin@gpp.local only): DCRS's word is enough.
+  const signIn = (deviceId: string) =>
+    app.inject({ method: 'POST', url: '/auth/login', payload: { username: 'owner@gpp.local', password: 'x', device: { deviceId, name: deviceId, os: 'Android' } } });
+  const first = await signIn('owner-phone');
+  expect(first.statusCode).toBe(200);
+  expect(first.json<LoginResponse>().user.role).toBe('super_admin');
+  const owner = as(first.json<LoginResponse>().token);
+  expect((await owner.get('/me')).json()).toMatchObject({ user: { role: 'super_admin' } });
+  expect((await owner.get('/admin/accounts')).statusCode).toBe(200);
+
+  // The role is taken away in DCRS: at the next sign-in it no longer counts, on every device of the person.
+  role = 'staff';
+  const second = await signIn('owner-tablet');
+  expect(second.json<LoginResponse>().user.role).toBe('user');
+  expect((await owner.get('/me')).json()).toMatchObject({ user: { role: 'user' } });
+  expect((await owner.get('/admin/accounts')).statusCode).toBe(403);
+});
+
+it('keeps SUPER_ADMINS as an extra list beside DCRS', async () => {
+  const { app } = await start({
+    'GET /api/v1/me': () => json(200, { id: 'u-admin', name: 'Admin', email: 'admin@gpp.local', role: 'staff', departments: [] }),
+  });
+  const response = await app.inject({ method: 'POST', url: '/auth/login', payload: { username: 'admin@gpp.local', password: 'x', device: { deviceId: 'd1' } } });
+  expect(response.json<LoginResponse>().user.role).toBe('super_admin');
 });

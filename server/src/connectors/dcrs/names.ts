@@ -116,7 +116,7 @@ export function dcrsNames(dcrs: DcrsClient) {
     return { recordId: started, created: isObject(opened) && opened.created === true };
   }
 
-  return { document, record, recordIdOf };
+  return { document, dayRecord, record, recordIdOf };
 }
 
 export type DcrsNames = ReturnType<typeof dcrsNames>;

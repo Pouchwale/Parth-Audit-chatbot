@@ -74,7 +74,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AppDeps) {
       id: user.id,
       username: user.username,
       displayName: user.displayName,
-      role: roleOf(deps.config, user.username),
+      role: roleOf(deps.config, user),
       activeSessions,
       lastSeenAt: lastSeen?.toISOString() ?? null,
       lastAction: lastAction ? actionEntry(lastAction) : null,

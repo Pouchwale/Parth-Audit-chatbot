@@ -17,6 +17,9 @@ export const users = pgTable(
     displayName: text('display_name').notNull(),
     createdAt: at('created_at').notNull().defaultNow(),
     lastLoginAt: at('last_login_at'),
+    // The connected system said, at this person's last sign-in, that they are its administrator (DCRS's super admin):
+    // they are this app's super admin too. Set again at every sign-in.
+    systemAdmin: boolean('system_admin').notNull().default(false),
   },
   (t) => [uniqueIndex('users_provider_external_id').on(t.provider, t.externalId)],
 );
