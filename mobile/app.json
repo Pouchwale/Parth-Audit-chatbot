@@ -3,15 +3,24 @@
     "name": "Mitra",
     "slug": "mitra",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "mitra",
     "userInterfaceStyle": "automatic",
+    "updates": {
+      "url": "https://u.expo.dev/4add7f19-7318-43c1-be5c-efb24f28e6ab",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
     "ios": {
       "bundleIdentifier": "com.pouchwale.mitra"
     },
     "android": {
       "package": "com.pouchwale.mitra",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#7E3C40",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -49,11 +58,24 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera so you can attach photos to your requests."
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "4add7f19-7318-43c1-be5c-efb24f28e6ab"
+      }
     }
   }
 }

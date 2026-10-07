@@ -1,0 +1,39 @@
+# What EAS Build leaves out when it uploads this repository to build the Android app (eas build, run from mobile/).
+# EAS uploads the whole Git repository from this folder, its root, and reads this file INSTEAD of the .gitignore files,
+# so everything they ignore is repeated here. The build needs only mobile/ and shared/.
+
+# Git, packages, secrets
+.git
+node_modules/
+.env
+.env.*
+*.pem
+*.key
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+
+# The Mitra server and its data, chats and files: the app is built without them
+/server/
+.data/
+/scripts/
+
+# Build output, logs and the generated native folders (EAS makes android/ itself, from app.json)
+dist/
+web-build/
+coverage/
+*.log
+*.tsbuildinfo
+mobile/.expo/
+mobile/expo-env.d.ts
+mobile/android/
+mobile/ios/
+mobile/.kotlin/
+*.orig.*
+.metro-health-check*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.DS_Store
+Thumbs.db
