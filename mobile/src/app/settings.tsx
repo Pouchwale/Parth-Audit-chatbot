@@ -1,16 +1,19 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
+import * as Updates from 'expo-updates';
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ServerAddressForm } from '@/components/ServerAddressForm';
 import { Avatar, Button, Card, Chip, Notice, SectionTitle, SegmentedControl, Toggle } from '@/components/ui';
 import { MaxContentWidth, Spacing, useTheme } from '@/constants/theme';
-import { api, errorMessage, SERVER_URL } from '@/lib/api';
+import { api, ASKS_FOR_SERVER, errorMessage, saveServer, useServer } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useConfirm } from '@/lib/confirm';
 import { useConversations } from '@/lib/conversations';
-import { ROLE_LABEL } from '@/lib/format';
+import { dateTime, ROLE_LABEL } from '@/lib/format';
+import { shortAddress } from '@/lib/server-address';
 import { useSettings, type AppearancePreference, type ReadAloudPreference, type ReplyLanguage } from '@/lib/settings';
 import { DOWNLOADS_RECORDED } from '@/lib/share';
 
@@ -109,7 +112,9 @@ export default function SettingsScreen() {
       <SectionTitle>About</SectionTitle>
       <Card>
         <InfoRow label="App version" value={Constants.expoConfig?.version ?? 'Unknown'} />
-        <InfoRow label="Server" value={SERVER_URL ?? 'Not known'} />
+        {/* The installed app's updates (EAS Update); Expo Go and the web build have none of their own. */}
+        {ASKS_FOR_SERVER && Platform.OS !== 'web' && Updates.isEnabled ? <UpdateInfo /> : null}
+        <ServerSetting />
       </Card>
 
       <SignOut />
@@ -174,6 +179,71 @@ function InfoRow({ label, value }: { label: string; value: string }) {
         {value}
       </Text>
     </View>
+  );
+}
+
+/**
+ * The update the installed app runs, and a restart when a newer one has been downloaded. The app checks for one each
+ * time it opens and uses it the next time it opens; Restart uses it now.
+ */
+function UpdateInfo() {
+  const { currentlyRunning, isUpdatePending } = Updates.useUpdates();
+  const [busy, setBusy] = useState(false);
+  const created = currentlyRunning.isEmbeddedLaunch ? null : currentlyRunning.createdAt;
+  return (
+    <>
+      <InfoRow label="Last update" value={created ? dateTime(created.toISOString()) : 'None yet'} />
+      {isUpdatePending ? (
+        <>
+          <Notice>A new version of Mitra is ready. Restart Mitra to use it.</Notice>
+          <Button
+            title="Restart Mitra"
+            busy={busy}
+            onPress={() => {
+              setBusy(true);
+              Updates.reloadAsync().catch(() => setBusy(false));
+            }}
+          />
+        </>
+      ) : null}
+    </>
+  );
+}
+
+/** The server's address; the installed app can change it here (lib/server-address.ts). */
+function ServerSetting() {
+  const server = useServer();
+  const { signOut } = useAuth();
+  const ask = useConfirm();
+  const [changing, setChanging] = useState(false);
+
+  async function change(address: string) {
+    if (address === server) {
+      setChanging(false);
+      return;
+    }
+    const confirmed = await ask(
+      'Change the server?',
+      `You'll be signed out of this server. Then sign in again on the Mitra server at ${shortAddress(address)}.`,
+      'Change server',
+    );
+    if (!confirmed) return;
+    // Signed out of the server in use first, then the new address saved: the sign-in screen opens for it.
+    await signOut();
+    await saveServer(address);
+  }
+
+  return (
+    <>
+      <InfoRow label="Server" value={server ?? 'Not known'} />
+      {ASKS_FOR_SERVER ? (
+        changing ? (
+          <ServerAddressForm current={server} action="Change server" onReady={change} onCancel={() => setChanging(false)} />
+        ) : (
+          <Button title="Change server" kind="secondary" onPress={() => setChanging(true)} />
+        )
+      ) : null}
+    </>
   );
 }
 

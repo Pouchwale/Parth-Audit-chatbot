@@ -23,16 +23,34 @@ import type {
   WeeklyReport,
   WeeklyReportSummary,
 } from '@shared/api';
-import Constants from 'expo-constants';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
 import { timeZone } from './device';
-import { serverAddress, unreachableMessage } from './server-address';
+import { addressProblem, asksForServer, serverAddress, unreachableMessage } from './server-address';
+import { getItem, setItem } from './storage';
 
 /**
- * Where the Mitra server is (lib/server-address.ts): EXPO_PUBLIC_API_URL when it was set where the app was bundled;
- * in a browser, the page's own computer; in Expo Go, the computer it loaded the app from, which runs the server too.
+ * Whether this copy of the app asks for its server's address (lib/server-address.ts): the installed Android app does;
+ * Expo Go and the web build find the server themselves.
  */
-function findServer(): string | null {
+export const ASKS_FOR_SERVER: boolean = asksForServer({
+  platform: Platform.OS,
+  inExpoGo: Constants.executionEnvironment === ExecutionEnvironment.StoreClient,
+  webAsks: process.env.EXPO_PUBLIC_ASK_FOR_SERVER,
+});
+
+/** Where the installed app keeps the address it was given. */
+const SERVER_KEY = 'server';
+
+/**
+ * Where the Mitra server is (lib/server-address.ts). The installed app: the address saved on the phone, else the
+ * build's EXPO_PUBLIC_API_URL. Expo Go and the web build: EXPO_PUBLIC_API_URL when it was set where the app was
+ * bundled; in a browser, the page's own computer; in Expo Go, the computer it loaded the app from, which runs the
+ * server too.
+ */
+function findServer(saved: string | null): string | null {
+  if (ASKS_FOR_SERVER) return serverAddress({ asks: true, saved, configured: process.env.EXPO_PUBLIC_API_URL });
   return serverAddress({
     configured: process.env.EXPO_PUBLIC_API_URL,
     page: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location : null,
@@ -40,13 +58,74 @@ function findServer(): string | null {
   });
 }
 
+// The server's address can change while the app runs (the installed app's sign-in screen and Settings), so it is kept
+// here and screens that show it listen for changes (useServer).
+let serverNow: string | null = findServer(null);
+const serverListeners = new Set<() => void>();
+
+function setServer(address: string | null) {
+  if (address === serverNow) return;
+  serverNow = address;
+  for (const listener of serverListeners) listener();
+}
+
 /** The Mitra server's address, or null when this copy of the app can't tell where it is. */
-export const SERVER_URL: string | null = findServer();
+export function currentServer(): string | null {
+  return serverNow;
+}
+
+function subscribeServer(listener: () => void): () => void {
+  serverListeners.add(listener);
+  return () => serverListeners.delete(listener);
+}
+
+/** The Mitra server's address, kept up to date on screen. */
+export function useServer(): string | null {
+  return useSyncExternalStore(subscribeServer, currentServer, currentServer);
+}
+
+/** Loads the address the installed app saved, before anything is asked of the server. */
+export async function loadServer(): Promise<void> {
+  if (!ASKS_FOR_SERVER) return;
+  const saved = await getItem(SERVER_KEY).catch(() => null);
+  setServer(findServer(saved));
+}
+
+/** Saves the server's address on the phone (an address checkServer has answered for) and uses it from now on. */
+export async function saveServer(address: string): Promise<void> {
+  await setItem(SERVER_KEY, address);
+  setServer(findServer(address));
+}
+
+/** A signal that aborts a request after `ms`: a phone can wait minutes for a computer that isn't there. */
+function deadline(ms: number): AbortSignal {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
+/** How long to wait for a server's /health before saying it can't be reached. */
+const HEALTH_WAIT_MS = 8_000;
+
+/**
+ * Checks that the Mitra server answers at `address` (its /health), before the app saves it. Throws an ApiError with
+ * what to do when it doesn't.
+ */
+export async function checkServer(address: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${address}/health`, { signal: deadline(HEALTH_WAIT_MS) });
+  } catch {
+    throw new ApiError(0, 'network', addressProblem('unreachable', address));
+  }
+  const body = (await response.json().catch(() => null)) as { ok?: unknown } | null;
+  if (!response.ok || body?.ok !== true) throw new ApiError(response.status, 'not_mitra', addressProblem('notMitra', address));
+}
 
 /** The server's address for a request; when the app can't tell where it is, the error that says what to do. */
 export function serverBase(): string {
-  if (!SERVER_URL) throw unreachable();
-  return SERVER_URL;
+  if (!serverNow) throw unreachable();
+  return serverNow;
 }
 
 export class ApiError extends Error {
@@ -63,7 +142,7 @@ export class ApiError extends Error {
 
 /** The error for a request that never reached the server: what to try, in plain words, with the address it tried. */
 export function unreachable(): ApiError {
-  return new ApiError(0, 'network', unreachableMessage(SERVER_URL, Platform.OS === 'web' ? 'computer' : 'phone'));
+  return new ApiError(0, 'network', unreachableMessage(serverNow, Platform.OS === 'web' ? 'computer' : 'phone', ASKS_FOR_SERVER));
 }
 
 /** The error the server answered with, taken from its JSON body when it has one. */
@@ -160,7 +239,8 @@ function query(params: Record<string, string | undefined>): string {
 export const api = {
   signInInfo: () => request<SignInInfo>('/auth/provider'),
   login: (body: LoginRequest) => request<LoginResponse>('/auth/login', { method: 'POST', body }),
-  logout: (token: string) => request<void>('/auth/logout', { method: 'POST', token }),
+  /** Waits 5 seconds at most: signing out goes ahead on the phone either way, and its server may be gone. */
+  logout: (token: string) => request<void>('/auth/logout', { method: 'POST', token, signal: deadline(5_000) }),
   me: (token: string) => request<{ user: CurrentUser }>('/me', { token }),
   capabilities: (token: string) => request<Capabilities>('/assistant/capabilities', { token }),
   send: (token: string, body: MessageRequest) => request<AssistantReply>('/assistant/messages', { method: 'POST', body, token }),

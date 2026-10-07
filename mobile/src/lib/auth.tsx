@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { CurrentUser } from '@shared/api';
-import { api, ApiError } from './api';
+import { api, ApiError, loadServer } from './api';
 import { deviceInfo } from './device';
 import { deleteItem, getItem, setItem } from './storage';
 
@@ -39,7 +39,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      const [savedToken, savedUser] = await Promise.all([getItem('token'), getItem('user')]);
+      // The installed app's saved server address first: the saved session belongs to that server.
+      const [savedToken, savedUser] = await Promise.all([getItem('token'), getItem('user'), loadServer()]);
       if (!savedToken) return setStatus('signedOut');
       try {
         const { user: fresh } = await api.me(savedToken);
