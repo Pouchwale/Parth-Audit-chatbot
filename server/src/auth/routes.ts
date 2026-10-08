@@ -1,7 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { DeviceInfo, LoginRequest, LoginResponse, SignInInfo } from '@shared/api.ts';
+import type { DeviceInfo, LoginRequest, LoginResponse, MeResponse, SignInInfo } from '@shared/api.ts';
 import type { AppDeps } from '../app.ts';
 import { ConnectorError, type ConnectorAccount } from '../connectors/types.ts';
 import { one } from '../db/index.ts';
@@ -107,7 +107,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AppDeps) {
     });
 
     for (const old of replaced) await endSession(deps, old.id, 'replaced', request.log);
-    return { token, user: currentUser(deps.config, user) } satisfies LoginResponse;
+    // With the session's end, so the app can say so ten minutes before (DCRS ends it with the day).
+    return { token, user: currentUser(deps.config, user), expiresAt: expiresAt.toISOString() } satisfies LoginResponse;
   });
 
   app.post('/auth/logout', { preHandler: session }, async (request, reply) => {
@@ -116,6 +117,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.get('/me', { preHandler: session }, async (request) => {
-    return { user: currentUser(deps.config, authOf(request).user) };
+    const auth = authOf(request);
+    return { user: currentUser(deps.config, auth.user), expiresAt: auth.session.expiresAt.toISOString() } satisfies MeResponse;
   });
 }

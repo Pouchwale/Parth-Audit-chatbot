@@ -54,6 +54,7 @@ interface Session {
   getState(): State;
   load(): void;
   send(text: string, spoken: boolean, attachments: []): void;
+  resend(): void;
   edit(messageId: string, text: string): void;
   openEditor(messageId: string): void;
   closeEditor(): void;
@@ -62,7 +63,10 @@ interface Session {
   keepDraft(messageId: string, text: string): void;
 }
 interface SessionModule {
-  ChatSession: new (deps: { call<T>(request: (token: string) => Promise<T>): Promise<T>; changed(): void; busy(): void }, conversationId?: string) => Session;
+  ChatSession: new (
+    deps: { call<T>(request: (token: string) => Promise<T>): Promise<T>; changed(): void; busy(): void; who?(): string | null },
+    conversationId?: string,
+  ) => Session;
   madeChangesAfter(messages: readonly ChatMessage[], messageId: string): boolean;
 }
 // Loaded by a path the server's typecheck does not follow: the app's files are the app's typecheck's.
@@ -207,6 +211,53 @@ const card = (status: 'pending' | 'confirmed' | 'cancelled', ...changes: ReturnT
 });
 const lookup = (kind: 'read' | 'write', status: 'running' | 'succeeded' | 'failed' | 'cancelled'): MessagePart => ({ type: 'activity', id: 'act', system: 'DCRS', summary: 'A lookup', kind, status, error: null });
 const after = (...parts: MessagePart[]): ChatMessage[] => [user('u1', 'Start the record'), assistant('a1', parts)];
+
+it("keeps a message refused because the session had ended, for the same person's next sign-in, in its own chat", async () => {
+  // DCRS ends the super admin's day at midnight, and the server then answers 401: the message used to be lost with the
+  // screen (the review of 8-Oct-2026).
+  const as = (who: string) => ({ call: <T,>(request: (token: string) => Promise<T>) => request('token'), changed: () => {}, busy: () => {}, who: () => who });
+  const ENDED = 'Your session ended before this was sent. Send it again.';
+  server.answer = async () => {
+    throw new ApiError(401, 'session_expired', 'Your session has ended. Sign in again.');
+  };
+  const atMidnight = new ChatSession(as('u-admin'));
+  atMidnight.send("Open today's pest control record", false, []);
+  await finished(atMidnight);
+  // Shown not sent, with why, while the screen still shows it.
+  expect(atMidnight.getState().messages).toEqual([]);
+  expect(atMidnight.getState().unsent).toMatchObject({ request: { kind: 'message', text: "Open today's pest control record" }, error: ENDED });
+
+  // Nobody else signing in on this phone is shown it, and no other chat of his.
+  expect(new ChatSession(as('u-staff')).getState().unsent).toBeNull();
+  expect(new ChatSession(as('u-admin'), 'c1').getState().unsent).toBeNull();
+  // He signs in again: his new chat has it, ready to send again - once.
+  const again = new ChatSession(as('u-admin'));
+  expect(again.getState().unsent).toMatchObject({ request: { kind: 'message', text: "Open today's pest control record" }, error: ENDED });
+  expect(new ChatSession(as('u-admin')).getState().unsent).toBeNull();
+
+  server.answer = async (_request, progress) => {
+    progress({ type: 'start', conversationId: 'c-new', title: null, userMessage: user('u-new', "Open today's pest control record"), message: assistant('a-new', [], 'streaming') });
+    return { conversationId: 'c-new', reply: 'Opened.', confirmation: null, message: assistant('a-new', [{ type: 'text', text: 'Opened.' }]), title: null };
+  };
+  again.resend();
+  await finished(again);
+  expect(server.requests.at(-1)).toMatchObject({ kind: 'message', text: "Open today's pest control record" });
+  expect(again.getState().unsent).toBeNull();
+  expect(again.getState().messages.map((message) => message.id)).toEqual(['u-new', 'a-new']);
+
+  // A message in a saved conversation is kept for that conversation.
+  server.answer = async () => {
+    throw new ApiError(401, 'session_expired', 'Your session has ended. Sign in again.');
+  };
+  server.saved = { id: 'c1', title: 'Questions', messages: conversation(), createdAt: AT, updatedAt: AT };
+  const saved = new ChatSession(as('u-admin'), 'c1');
+  saved.load();
+  await vi.waitFor(() => expect(saved.getState().history.status).toBe('ready'));
+  saved.send('And the viscosity record', false, []);
+  await finished(saved);
+  expect(new ChatSession(as('u-admin')).getState().unsent).toBeNull();
+  expect(new ChatSession(as('u-admin'), 'c1').getState().unsent).toMatchObject({ request: { kind: 'message', conversationId: 'c1', text: 'And the viscosity record' } });
+});
 
 it('says a message made changes only when something after it did, as the conversation is now', () => {
   // Waiting for a confirmation, or turned down, or failed: nothing was changed.

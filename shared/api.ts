@@ -37,6 +37,18 @@ export interface LoginRequest {
 export interface LoginResponse {
   token: string;
   user: CurrentUser;
+  /**
+   * When this session ends (ISO): the earlier of this server's own session length and the connected system's session.
+   * DCRS ends a day's session at the close of the staff's working hours, and at midnight for the super admin. The app
+   * says so ten minutes before.
+   */
+  expiresAt: string;
+}
+
+/** GET /me: who is signed in, and when this session ends (as at sign-in). */
+export interface MeResponse {
+  user: CurrentUser;
+  expiresAt: string;
 }
 
 /**

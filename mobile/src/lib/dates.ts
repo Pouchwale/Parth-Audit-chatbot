@@ -60,6 +60,15 @@ function wallClock(instant: number, timeZone: string | undefined): WallClock {
   };
 }
 
+/**
+ * The time of day of a moment, e.g. "12:00 am" or "6:20 pm", in `timeZone`, or in this device's time zone when there is
+ * none (the factory's, on the plant's phones).
+ */
+export function clockTime(iso: string, timeZone?: string): string {
+  const { hour, minute } = wallClock(Date.parse(iso), timeZone);
+  return `${hour % 12 === 0 ? 12 : hour % 12}:${twoDigits(minute)} ${hour < 12 ? 'am' : 'pm'}`;
+}
+
 /** The clock's reading as if it were UTC, in epoch milliseconds. */
 function asUtc(clock: WallClock): number {
   return Date.UTC(clock.year, clock.month - 1, clock.day, clock.hour, clock.minute, clock.second);

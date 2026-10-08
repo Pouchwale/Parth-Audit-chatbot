@@ -49,6 +49,27 @@ export interface ChatSessionDeps {
   changed(): void;
   /** A request started (true) or finished (false). */
   busy(session: ChatSession, busy: boolean): void;
+  /** Who is signed in (their id): a message refused because the session had ended is kept for them. */
+  who?(): string | null;
+}
+
+/** Why a message kept from a session that ended is shown not sent. */
+export const SESSION_ENDED_WORDS = 'Your session ended before this was sent. Send it again.';
+
+// A MESSAGE SENT AS THE SESSION ENDED (DCRS ends a day's session at the close of the staff's hours, and at midnight for
+// the super admin): refused with 401 before the server took it, it used to be lost — the person was signed out and the
+// words went with the screen (the review of 8-Oct-2026). It is kept here, in memory, for the same person's next sign-in,
+// in the chat it was sent in ('' for a new chat): shown there not sent, with Send again. Never anybody else's.
+const keptForNextSignIn = new Map<string, { request: ChatRequest; spoken: boolean }>();
+const keptKey = (person: string, conversationId: string | null | undefined): string => `${person}\n${conversationId ?? ''}`;
+
+/** The message kept for this person in this chat, if any; taken, so it is shown once. */
+function takeKept(person: string | null, conversationId: string | undefined): { request: ChatRequest; spoken: boolean } | null {
+  if (!person) return null;
+  const key = keptKey(person, conversationId);
+  const kept = keptForNextSignIn.get(key) ?? null;
+  keptForNextSignIn.delete(key);
+  return kept;
 }
 
 interface Attempt {
@@ -101,6 +122,8 @@ export class ChatSession {
   constructor(deps: ChatSessionDeps, conversationId?: string) {
     this.deps = deps;
     this.historyRequested = !conversationId;
+    // A message this person sent here as their last session ended, waiting to be sent again.
+    const kept = takeKept(deps.who?.() ?? null, conversationId);
     this.state = {
       conversationId: conversationId ?? null,
       title: null,
@@ -109,7 +132,7 @@ export class ChatSession {
       running: null,
       stopping: false,
       settling: false,
-      unsent: null,
+      unsent: kept ? { ...kept, error: SESSION_ENDED_WORDS } : null,
       waiting: null,
       editor: null,
     };
@@ -220,6 +243,8 @@ export class ChatSession {
 
   private async run(request: ChatRequest, spoken: boolean): Promise<void> {
     if (this.state.running) return;
+    // Who sends it, read while they are signed in: a refusal because the session ended signs them out.
+    const person = this.deps.who?.() ?? null;
     const controller = new AbortController();
     this.controller = controller;
     const attempt = this.begin(request);
@@ -231,7 +256,7 @@ export class ChatSession {
       for (const listener of this.replyListeners) listener({ reply, spoken });
     } catch (error) {
       if (controller.signal.aborted) this.endWriting('stopped');
-      else if (error instanceof ApiError && error.status === 401) return; // Signed out: the sign-in screen says why.
+      else if (error instanceof ApiError && error.status === 401) return this.keepForNextSignIn(request, spoken, attempt, person); // Signed out: the sign-in screen says why.
       else if (attempt.started) this.endWriting('error', errorMessage(error));
       else return this.notSent(request, spoken, attempt, error);
       if (attempt.started && this.writing) this.unsettled.add(this.writing);
@@ -340,6 +365,17 @@ export class ChatSession {
   /** Ends the reply being written, when it didn't finish normally. */
   private endWriting(status: 'stopped' | 'error', error: string | null = null): void {
     this.editWriting((message) => (message.status === 'streaming' ? { ...message, status, error } : message), 'now');
+  }
+
+  /**
+   * Refused because the session had ended, before the server took it: a new message is kept for the same person's next
+   * sign-in, in this chat, and shown here not sent meanwhile. Anything else simply goes with the session.
+   */
+  private keepForNextSignIn(request: ChatRequest, spoken: boolean, attempt: Attempt, person: string | null): void {
+    if (attempt.started || request.kind !== 'message' || !person) return;
+    keptForNextSignIn.set(keptKey(person, request.conversationId), { request, spoken });
+    const shown = new Set([attempt.localUserId, this.writing]);
+    this.update({ messages: this.state.messages.filter((message) => !shown.has(message.id)), unsent: { request, spoken, error: SESSION_ENDED_WORDS } });
   }
 
   private notSent(request: ChatRequest, spoken: boolean, attempt: Attempt, error: unknown): void {

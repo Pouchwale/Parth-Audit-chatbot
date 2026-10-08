@@ -18,6 +18,7 @@ class ChatSessions {
     this.deps = {
       call: (request) => this.latest.current.call(request),
       changed: () => this.latest.current.changed(),
+      who: () => this.latest.current.who?.() ?? null,
       busy: (session, busy) => {
         if (busy) this.running.add(session);
         else this.running.delete(session);
@@ -42,12 +43,13 @@ const ChatSessionsContext = createContext<ChatSessions | null>(null);
 
 /** Holds the chats while the person is signed in; signing out stops any reply still being written. */
 export function ChatSessionsProvider({ children }: { children: ReactNode }) {
-  const { call } = useAuth();
+  const { call, user } = useAuth();
   const { refresh } = useConversations();
-  const latest = useRef({ call, changed: () => void refresh() });
+  const userId = user?.id ?? null;
+  const latest = useRef({ call, changed: () => void refresh(), who: (): string | null => userId });
   useEffect(() => {
-    latest.current = { call, changed: () => void refresh() };
-  }, [call, refresh]);
+    latest.current = { call, changed: () => void refresh(), who: () => userId };
+  }, [call, refresh, userId]);
   const [sessions] = useState(() => new ChatSessions(latest));
   useEffect(() => () => sessions.abandonAll(), [sessions]);
 

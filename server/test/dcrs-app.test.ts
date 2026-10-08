@@ -2,7 +2,7 @@
 // person's confirmation, and a DCRS sign-in that has ended. DCRS is the stand-in; the model is scripted.
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
-import type { AssistantReply, LoginResponse } from '@shared/api.ts';
+import type { AssistantReply, LoginResponse, MeResponse } from '@shared/api.ts';
 import { buildApp } from '../src/app.ts';
 import { createDcrsConnector } from '../src/connectors/dcrs/index.ts';
 import { createRegistry } from '../src/connectors/registry.ts';
@@ -72,6 +72,17 @@ it('signs a person in with their DCRS account, keeping the session to the close 
   const [stored] = await database.db.select().from(connectorCredentials);
   expect(stored!.sealed).not.toContain(TOKEN);
   expect(dcrs.seen.map((r) => r.headers['x-client-name'])).toEqual(['Mitra mobile app', 'Mitra mobile app']);
+});
+
+it('tells the app when its session ends, at sign-in and in /me, so the app can say so ten minutes before', async () => {
+  // DCRS ends a day's session with the staff's hours, and at midnight for the super admin (the review of 8-Oct-2026).
+  const { login, as } = await start({ 'POST /api/auth/login': () => signedIn({ maxAge: 3_600 }) });
+  const answer = (await login()).json<LoginResponse>();
+  const [session] = await database.db.select().from(sessions);
+  expect(answer.expiresAt).toBe(session!.expiresAt.toISOString());
+  const me = await as(answer.token).get('/me');
+  expect(me.statusCode).toBe(200);
+  expect(me.json<MeResponse>()).toMatchObject({ user: { username: 'kapila.barad@gpp.local' }, expiresAt: session!.expiresAt.toISOString() });
 });
 
 it("turns a sign-in down in DCRS's own words outside working hours, and a wrong password as such", async () => {

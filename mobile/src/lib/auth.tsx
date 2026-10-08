@@ -11,6 +11,8 @@ interface AuthValue {
   user: CurrentUser | null;
   /** Why the person was signed out, e.g. their session expired. */
   notice: string | null;
+  /** When this session ends (ISO), as the server said; null when it did not say. The chat warns ten minutes before. */
+  endsAt: string | null;
   signIn(username: string, password: string): Promise<void>;
   signOut(): Promise<void>;
   /** Calls the API with the session token; a 401 signs the person out. */
@@ -24,32 +26,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [endsAt, setEndsAt] = useState<string | null>(null);
   // The token of the sign-in in use. A request still running for one that has ended, because the person signed
   // out meanwhile, expects its 401: that must not say their session ended, or sign out whoever is signed in now.
   const current = useRef<string | null>(null);
 
   const forget = useCallback(async (reason: string | null) => {
     current.current = null;
-    await Promise.all([deleteItem('token'), deleteItem('user')]);
+    await Promise.all([deleteItem('token'), deleteItem('user'), deleteItem('sessionEndsAt')]);
     setToken(null);
     setUser(null);
+    setEndsAt(null);
     setNotice(reason);
     setStatus('signedOut');
   }, []);
 
   useEffect(() => {
     (async () => {
-      const [savedToken, savedUser] = await Promise.all([getItem('token'), getItem('user')]);
+      const [savedToken, savedUser, savedEnd] = await Promise.all([getItem('token'), getItem('user'), getItem('sessionEndsAt')]);
       if (!savedToken) return setStatus('signedOut');
       try {
-        const { user: fresh } = await api.me(savedToken);
-        await setItem('user', JSON.stringify(fresh));
-        setUser(fresh);
+        const me = await api.me(savedToken);
+        await Promise.all([setItem('user', JSON.stringify(me.user)), me.expiresAt ? setItem('sessionEndsAt', me.expiresAt) : Promise.resolve()]);
+        setUser(me.user);
+        setEndsAt(me.expiresAt ?? savedEnd);
       } catch (error) {
         if (error instanceof ApiError && error.status === 401) return forget(null);
         // Offline or server down: keep the session and let the first request decide.
         if (!savedUser) return forget(null);
         setUser(JSON.parse(savedUser) as CurrentUser);
+        setEndsAt(savedEnd);
       }
       current.current = savedToken;
       setToken(savedToken);
@@ -59,10 +65,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback(async (username: string, password: string) => {
     const result = await api.login({ username, password, device: await deviceInfo() });
-    await Promise.all([setItem('token', result.token), setItem('user', JSON.stringify(result.user))]);
+    await Promise.all([
+      setItem('token', result.token),
+      setItem('user', JSON.stringify(result.user)),
+      result.expiresAt ? setItem('sessionEndsAt', result.expiresAt) : deleteItem('sessionEndsAt'),
+    ]);
     current.current = result.token;
     setToken(result.token);
     setUser(result.user);
+    setEndsAt(result.expiresAt ?? null);
     setNotice(null);
     setStatus('signedIn');
   }, []);
@@ -86,7 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [token, forget],
   );
 
-  const value = useMemo(() => ({ status, user, notice, signIn, signOut, call }), [status, user, notice, signIn, signOut, call]);
+  const value = useMemo(() => ({ status, user, notice, endsAt, signIn, signOut, call }), [status, user, notice, endsAt, signIn, signOut, call]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
