@@ -547,7 +547,8 @@ const CASES: Case[] = [
     action: 'record_action',
     input: { recordId: 'rec-1', action: 'submit' },
     route: 'POST /api/v1/records/rec-1/actions',
-    body: { action: 'submit' },
+    // Run only once the person has confirmed the card that showed the record's values: that is their review.
+    body: { action: 'submit', reviewed: true },
     answer: { done: 'submit', did: 'Submitted for verification', ...CHANGED, status: 'Submitted', changes: undefined, problems: undefined },
     model: { done: 'submit', did: 'Submitted for verification', ...CHANGED_FOR_MODEL, status: 'Submitted', changes: undefined, problems: undefined },
   },
@@ -702,10 +703,12 @@ group('what the person is asked to confirm', () => {
       'GET /api/v1/documents/daily-pest-monitoring': () => json(200, PEST_DOC),
       'GET /api/v1/documents/F-QC-15-A': () => json(200, DOC_BRIEF),
       'GET /api/v1/records': (r) => json(200, dayAnswer(r.query.documentId === 'daily-pest-monitoring' ? PEST_DOC : DOC_BRIEF, r.query.from === 'today' ? '2026-09-30' : r.query.from!)),
+      'GET /api/v1/records/rec-1': () => json(200, RECORD),
     });
     const action = actionOf(connector.actions, name);
     return summaryOf(await action.describe(action.input.parse(input), ctx));
   };
+  const SUBMIT_REC_1 = 'Submit record rec-1. Its values: Line No.: 3; row 1: Status: OK. Confirming says you have reviewed them and they are correct.';
 
   it('says each change in plain words, from the call itself, naming the document as DCRS does', async () => {
     expect(await words('open_record', { documentId: 'daily-pest-monitoring' })).toBe(
@@ -717,7 +720,7 @@ group('what the person is asked to confirm', () => {
     expect(await words('edit_record', { recordId: 'rec-1', patch: { temperature: 4, remarks: 'All clear' }, note: 'Reading at 9' })).toBe(
       'In record rec-1, set temperature to 4; remarks to "All clear" (note: "Reading at 9")',
     );
-    expect(await words('record_action', { recordId: 'rec-1', action: 'submit' })).toBe('Submit record rec-1');
+    expect(await words('record_action', { recordId: 'rec-1', action: 'submit' })).toBe(SUBMIT_REC_1);
     expect(await words('record_action', { recordId: 'rec-1', action: 'verify' })).toBe('Verify (approve) record rec-1');
     expect(await words('record_action', { recordId: 'rec-1', action: 'send_back', reason: 'Sign the sheet' })).toBe('Send record rec-1 back for changes, saying "Sign the sheet"');
     expect(await words('record_action', { recordId: 'rec-1', action: 'resume' })).toMatch(/^Resume record rec-1/);
@@ -726,6 +729,32 @@ group('what the person is asked to confirm', () => {
     expect(await words('record_action', { recordId: 'rec-1', action: 'delete', reason: 'Started twice' })).toBe('Delete record rec-1, because "Started twice"');
     expect(await words('fill_record_with_sample_data', { recordId: 'rec-1' })).toMatch(/^Fill record rec-1 with sample data/);
     expect(await words('close_finding', { id: 'CAPA-2023-12-13-2', note: 'Painted' })).toBe('Close CAPA finding CAPA-2023-12-13-2 with the note: "Painted"');
+  });
+
+  it("puts a record's values on a submit's card, so confirming it is the person's review", async () => {
+    const sheet = (inWords: unknown[]) => {
+      const { connector, seen } = standInDcrs({ 'GET /api/v1/records/rec-1': () => json(200, { ...RECORD, inWords }) });
+      const submit = actionOf(connector.actions, 'record_action');
+      return { said: async () => summaryOf(await submit.describe({ recordId: 'rec-1', action: 'submit' }, ctx)), seen };
+    };
+    const one = sheet(RECORD.inWords);
+    expect(await one.said()).toBe(SUBMIT_REC_1);
+    // Read as the person, and nothing is submitted while the card waits.
+    expect(one.seen.map((r) => `${r.method} ${r.path}`)).toEqual(['GET /api/v1/records/rec-1']);
+    expectSentAsThePerson(one.seen[0]!);
+
+    expect(await sheet([{ label: 'Remarks', value: '' }]).said()).toBe(
+      'Submit record rec-1. No values are entered on it yet. Confirming says you have reviewed them and they are correct.',
+    );
+    const long = await sheet(Array.from({ length: 80 }, (_, i) => ({ where: `${String(i).padStart(2, '0')}:00`, label: 'Viscosity (20.0 ± 1.0 Sec.)', value: '20.4 Sec.' }))).said();
+    expect(long).toMatch(/^Submit record rec-1\. Its values: 00:00: Viscosity \(20\.0 ± 1\.0 Sec\.\): 20\.4 Sec\.; 01:00/);
+    expect(long).toMatch(/; and \d+ more \(open the record to see them all\)\. Confirming says/);
+    expect(long.length).toBeLessThan(900);
+
+    // DCRS cannot read the record: no card, so nothing is submitted unseen.
+    const { connector } = standInDcrs({ 'GET /api/v1/records/rec-1': () => refusal(404, 'not-found', 'There is no record "rec-1" in DCRS.') });
+    const submit = actionOf(connector.actions, 'record_action');
+    await expect(submit.describe({ recordId: 'rec-1', action: 'submit' }, ctx)).rejects.toMatchObject({ kind: 'not_found' });
   });
 
   it('asks for the reason DCRS needs before offering the change', async () => {
@@ -986,8 +1015,8 @@ group('naming a record by its document', () => {
         message: `There is no record of ${LABEL} for today yet. open_record starts one.`,
       });
     }
-    const submit = actionOf(connector.actions, 'record_action');
-    expect(summaryOf(await submit.describe({ recordId: 'rec-1', action: 'submit' }, ctx))).toBe('Submit record rec-1');
+    const verify = actionOf(connector.actions, 'record_action');
+    expect(summaryOf(await verify.describe({ recordId: 'rec-1', action: 'verify' }, ctx))).toBe('Verify (approve) record rec-1');
   });
 
   it('turns down a call that names neither a record nor a document, and a day with two records', async () => {

@@ -185,13 +185,20 @@ export function recordActions(dcrs: DcrsClient) {
           throw new ConnectorError('invalid_request', `A reason is needed to ${input.action.replace('_', ' ')} a record. Ask the person why, then try again.`);
         }
         const named = await names.record(ctx, input);
-        return { summary: words.say(named.words, input.reason ?? ''), input: named.input };
+        const summary = words.say(named.words, input.reason ?? '');
+        if (input.action !== 'submit') return { summary, input: named.input };
+        // A record is submitted only after the person has seen what it says (REQUIREMENTS §62 in DCRS): the card carries
+        // its values as DCRS reads them now, and confirming it is the person's review.
+        const record = await dcrs.json('GET', `/api/v1/records/${segment(named.input.recordId ?? '')}`, { token: tokenOf(ctx.credentials) });
+        return { summary: `${summary}. ${valuesForCard(record)} Confirming says you have reviewed them and they are correct.`, input: named.input };
       },
       run: async (ctx, input) => {
         const { recordId } = await names.recordIdOf(ctx, input);
         const answer = await dcrs.json('POST', `/api/v1/records/${segment(recordId)}/actions`, {
           token: tokenOf(ctx.credentials),
-          body: { action: input.action, ...(input.reason ? { reason: input.reason } : {}) },
+          // Runs only once the person has confirmed the card that showed the values: that is the review DCRS asks of a
+          // record the assistant prepared before it takes a submit.
+          body: { action: input.action, ...(input.reason ? { reason: input.reason } : {}), ...(input.action === 'submit' ? { reviewed: true } : {}) },
         });
         return changeForModel(answer);
       },
@@ -238,6 +245,32 @@ export function recordActions(dcrs: DcrsClient) {
       },
     }),
   ];
+}
+
+/** The most of a record's values a confirmation card shows: about a phone screen of them. */
+const CARD_VALUES_CHARS = 700;
+
+/**
+ * A record's values for a submit's confirmation card, from DCRS's values in words: "Its values: Line No.: 3; row 1:
+ * Status: OK." A long sheet shows what fits and says how many more there are.
+ */
+export function valuesForCard(record: unknown): string {
+  const inWords = record && typeof record === 'object' && Array.isArray((record as { inWords?: unknown }).inWords) ? (record as { inWords: unknown[] }).inWords : [];
+  const values = inWords.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const { where, label, value } = item as { where?: unknown; label?: unknown; value?: unknown };
+    if (typeof label !== 'string' || value === undefined || value === null || String(value).trim() === '') return [];
+    const said = String(value).replace(/\s+/g, ' ').trim();
+    return [`${typeof where === 'string' && where ? `${where}: ` : ''}${label}: ${said.length > 120 ? `${said.slice(0, 120)}…` : said}`];
+  });
+  if (values.length === 0) return 'No values are entered on it yet.';
+  let words = '';
+  for (const [index, value] of values.entries()) {
+    const next = words ? `${words}; ${value}` : value;
+    if (next.length > CARD_VALUES_CHARS && words) return `Its values: ${words}; and ${values.length - index} more (open the record to see them all).`;
+    words = next;
+  }
+  return `Its values: ${words}.`;
 }
 
 /** A change's answer with a note that the record was started first, when it was. */

@@ -8,7 +8,7 @@ import { createDcrsConnector } from '../src/connectors/dcrs/index.ts';
 import { createRegistry } from '../src/connectors/registry.ts';
 import { openDatabase, type Database } from '../src/db/index.ts';
 import { actions, connectorCredentials, loginEvents, sessions } from '../src/db/schema.ts';
-import { BASE, json, refusal, signedIn, standInDcrs, TOKEN, type Route } from './dcrs-standin.ts';
+import { BASE, json, RECORD, refusal, signedIn, standInDcrs, TOKEN, type Route } from './dcrs-standin.ts';
 import { callsTool, says, scriptedModel, testConfig } from './helpers.ts';
 
 let database: Database;
@@ -126,6 +126,31 @@ it("answers a lookup at once, and starts today's record only once the person con
       { action: 'open_record', kind: 'write', status: 'succeeded' },
     ]),
   );
+});
+
+it("shows a record's values on Mitra's submit card, and tells DCRS it was reviewed only once the person confirms", async () => {
+  const { login, as, dcrs, model } = await start({
+    'GET /api/v1/records/rec-1': () => json(200, RECORD),
+    'POST /api/v1/records/rec-1/actions': () => json(200, { done: 'submit', recordId: 'rec-1', status: 'Pending Verification', editable: false, actions: ['verify', 'send_back'] }),
+  });
+  const kapila = as((await login()).json<LoginResponse>().token);
+
+  model.queue(callsTool('dcrs__record_action', { recordId: 'rec-1', action: 'submit' }, "Here is what it says. I'll submit it once you confirm."));
+  const proposed = (await kapila.post('/assistant/messages', { text: 'Submit the line clearance' })).json<AssistantReply>();
+  expect(proposed.confirmation?.changes).toEqual([
+    {
+      system: 'Digital Controlled Record System',
+      summary: 'Submit record rec-1. Its values: Line No.: 3; row 1: Status: OK. Confirming says you have reviewed them and they are correct.',
+    },
+  ]);
+  // Only read while the card waits.
+  expect(dcrs.seen.filter((r) => r.path === '/api/v1/records/rec-1/actions')).toEqual([]);
+
+  model.queue(says('Submitted.'));
+  await kapila.post(`/assistant/conversations/${proposed.conversationId}/decision`, { confirmationId: proposed.confirmation!.id, decision: 'confirm' });
+  expect(dcrs.seen.filter((r) => r.path === '/api/v1/records/rec-1/actions')).toMatchObject([
+    { method: 'POST', body: { action: 'submit', reviewed: true }, headers: { authorization: `Bearer ${TOKEN}`, 'x-client-name': 'Mitra mobile app' } },
+  ]);
 });
 
 it('ends the session when DCRS says its sign-in has ended', async () => {
