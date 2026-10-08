@@ -63,21 +63,30 @@ export function dcrsNames(dcrs: DcrsClient) {
     return named(await aboutDocument(said, () => dcrs.json('GET', `/api/v1/documents/${segment(said)}`, { token: tokenOf(ctx.credentials) })));
   }
 
-  /** A document's record of a day (DCRS's today when no date is given): its id, or null when it is not started. */
-  async function dayRecord(ctx: ActionContext, said: string, date: string | undefined): Promise<{ document: NamedDocument; date: string | undefined; recordId: string | null }> {
-    const day = date ?? 'today';
+  /**
+   * A document's day as DCRS holds it (DCRS's today when no date is given): the document, the date DCRS read the day
+   * as, and the ids of the records it holds for that day — none, one, or several (an as-required document such as
+   * F/MKT/05 starts a new record each time, so a day can hold many).
+   */
+  async function day(ctx: ActionContext, said: string, date: string | undefined): Promise<{ document: NamedDocument; date: string | undefined; recordIds: string[] }> {
+    const asked = date ?? 'today';
     const answer = await aboutDocument(said, () =>
-      dcrs.json('GET', '/api/v1/records', { token: tokenOf(ctx.credentials), query: { documentId: said, from: day, to: day, limit: 5 } }),
+      dcrs.json('GET', '/api/v1/records', { token: tokenOf(ctx.credentials), query: { documentId: said, from: asked, to: asked, limit: 5 } }),
     );
     if (!isObject(answer)) throw new ConnectorError('unavailable', 'DCRS answered in a way the assistant does not understand.');
-    const document = named(answer.document);
-    const started = (Array.isArray(answer.records) ? answer.records : []).flatMap((record) =>
+    const recordIds = (Array.isArray(answer.records) ? answer.records : []).flatMap((record) =>
       isObject(record) && typeof record.recordId === 'string' && record.recordId ? [record.recordId] : [],
     );
-    if (started.length > 1) {
-      throw new ConnectorError('conflict', `${document.label} has ${started.length} records for that day: ${started.join(', ')}. Say which one, by its recordId.`);
+    return { document: named(answer.document), date: typeof answer.to === 'string' && answer.to ? answer.to : date, recordIds };
+  }
+
+  /** A document's record of a day (DCRS's today when no date is given): its id, or null when it is not started. Several that day: say which. */
+  async function dayRecord(ctx: ActionContext, said: string, date: string | undefined): Promise<{ document: NamedDocument; date: string | undefined; recordId: string | null }> {
+    const { document, date: on, recordIds } = await day(ctx, said, date);
+    if (recordIds.length > 1) {
+      throw new ConnectorError('conflict', `${document.label} has ${recordIds.length} records for that day: ${recordIds.join(', ')}. Say which one, by its recordId.`);
     }
-    return { document, date: typeof answer.to === 'string' && answer.to ? answer.to : date, recordId: started[0] ?? null };
+    return { document, date: on, recordId: recordIds[0] ?? null };
   }
 
   /**
@@ -116,7 +125,7 @@ export function dcrsNames(dcrs: DcrsClient) {
     return { recordId: started, created: isObject(opened) && opened.created === true };
   }
 
-  return { document, dayRecord, record, recordIdOf };
+  return { day, document, dayRecord, record, recordIdOf };
 }
 
 export type DcrsNames = ReturnType<typeof dcrsNames>;

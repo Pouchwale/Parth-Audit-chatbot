@@ -1108,4 +1108,27 @@ group('the super admin at any hour (DCRS REQUIREMENTS §84 addendum, 6-Oct-2026)
     const named = (await open.describe(open.input.parse({ documentId: 'daily-pest-monitoring', date: '2026-10-01' }), ctx)) as { input: Record<string, unknown> };
     expect(named.input).toEqual({ documentId: 'daily-pest-monitoring', date: '2026-10-01' });
   });
+
+  it('starts another record of an as-required document on a day that already holds two, as DCRS does each time (F/MKT/05)', async () => {
+    // The review of 8-Oct-2026: pinning the day must not turn down a day with records. F/MKT/05 starts a new record
+    // each time a complaint comes in, so a day can hold many.
+    const complaints = { id: 'capa-customer-complaint', formatNo: 'F/MKT/05', name: 'CAPA — External: Customer Complaint Handling Checklist' };
+    const held = [{ ...LIST_ITEM, recordId: 'rec-a' }, { ...LIST_ITEM, recordId: 'rec-b' }];
+    const { connector, seen } = standInDcrs({
+      'GET /api/v1/records': () => json(200, { ...dayAnswer(complaints, '2026-10-08'), total: held.length, records: held }),
+      'POST /api/v1/records': () => json(201, { created: true, record: { ...RECORD, recordId: 'rec-c' } }),
+    });
+    const open = actionOf(connector.actions, 'open_record');
+    const described = await open.describe(open.input.parse({ documentId: 'F/MKT/05' }), ctx);
+    expect(described).toEqual({
+      summary: "Open today's record of F/MKT/05 CAPA — External: Customer Complaint Handling Checklist, starting it if there is none yet",
+      input: { documentId: 'capa-customer-complaint', date: '2026-10-08' },
+    });
+    const opened = (await open.run(ctx, open.input.parse((described as { input: Record<string, unknown> }).input))) as { created?: boolean };
+    expect(opened.created).toBe(true);
+    expect(seen.filter((r) => r.method === 'POST' && r.path === '/api/v1/records').map((r) => r.body)).toEqual([{ documentId: 'capa-customer-complaint', date: '2026-10-08' }]);
+    // Reading "today's record" of it still asks which one, by its recordId.
+    const read = actionOf(connector.actions, 'get_record');
+    await expect(read.describe({ documentId: 'F/MKT/05' }, ctx)).rejects.toMatchObject({ kind: 'conflict', message: expect.stringContaining('has 2 records for that day: rec-a, rec-b') });
+  });
 });

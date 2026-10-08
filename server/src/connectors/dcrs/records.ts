@@ -132,8 +132,10 @@ export function recordActions(dcrs: DcrsClient) {
         // DCRS says which document the words name and which day "today" is, so the card names the document in full and
         // what runs is that document's record of that very day — as the steps that fill it are pinned to it
         // (names.record). A card shown at 23:58 and confirmed after midnight still opens the day it showed, not the
-        // next one (only the super admin, never held to the staff's hours, works across midnight).
-        const day = await names.dayRecord(ctx, input.documentId, input.date);
+        // next one (only the super admin, never held to the staff's hours, works across midnight). Only the day is
+        // asked for: a day that already holds records is no reason to refuse, as DCRS starts an as-required document's
+        // record afresh each time (F/MKT/05; review of 8-Oct-2026), and opens a scheduled one's record of the day.
+        const day = await names.day(ctx, input.documentId, input.date);
         const date = day.date ?? input.date;
         return {
           summary: `Open ${dayRecordWords(day.document.label, input.date)}, starting it if there is none yet`,
