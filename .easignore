@@ -19,7 +19,7 @@ node_modules/
 .data/
 /scripts/
 
-# Build output, logs and the generated native folders (EAS makes android/ itself, from app.json)
+# Build output, logs and the generated native folders (EAS makes android/ itself, from mobile/app.config.ts)
 dist/
 web-build/
 coverage/

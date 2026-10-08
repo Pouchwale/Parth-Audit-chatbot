@@ -10,5 +10,9 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Firebase's file for the Android app: the owner's, kept out of Git (README, Notifications). EAS uploads it from
+# mobile/ when it is there (it is not in .easignore), or takes it from the file variable GOOGLE_SERVICES_JSON.
+mobile/google-services.json
+
 # Local embedded database used in development
 server/.data/
