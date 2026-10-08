@@ -16,6 +16,7 @@ import { registerExportRoutes } from './exports/routes.ts';
 import { registerFileRoutes } from './files/routes.ts';
 import type { ImageReader } from './files/vision.ts';
 import { errorResponse } from './http.ts';
+import { registerPhoneRoutes } from './phone/routes.ts';
 import { registerVoiceRoutes } from './voice/routes.ts';
 import type { Transcriber } from './voice/transcriber.ts';
 
@@ -38,7 +39,7 @@ export async function buildApp(deps: AppDeps, options: { logger?: FastifyServerO
   // "*" allows any web origin. Safe enough here because requests carry a bearer token, not cookies.
   await app.register(cors, {
     origin: deps.config.corsOrigins.includes('*') ? true : deps.config.corsOrigins,
-    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE'],
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
   });
   await app.register(rateLimit, { global: false });
 
@@ -58,5 +59,6 @@ export async function buildApp(deps: AppDeps, options: { logger?: FastifyServerO
   registerAdminRoutes(app, deps);
   registerExportAuditRoutes(app, deps);
   registerReportRoutes(app, deps);
+  registerPhoneRoutes(app, deps);
   return app;
 }

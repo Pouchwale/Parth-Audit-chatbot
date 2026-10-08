@@ -2,6 +2,7 @@ import type { Connector } from '../types.ts';
 import { dcrsClient, tokenOf, type DcrsOptions } from './client.ts';
 import { documentActions } from './documents.ts';
 import { findingActions } from './findings.ts';
+import { phoneRelay } from './phone.ts';
 import { plantActions } from './plant.ts';
 import { recordActions } from './records.ts';
 
@@ -29,5 +30,6 @@ export function createDcrsConnector(options: DcrsOptions): Connector {
     actions: [...documentActions(dcrs), ...plantActions(dcrs), ...recordActions(dcrs), ...findingActions(dcrs)],
     authenticate: (username, password) => dcrs.signIn(username.trim(), password),
     signOut: async (credentials) => dcrs.signOut(tokenOf(credentials)),
+    phone: phoneRelay(dcrs),
   };
 }

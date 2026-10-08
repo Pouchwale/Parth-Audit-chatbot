@@ -29,6 +29,9 @@ export interface DcrsCredentials {
 
 export type Query = Record<string, string | number | boolean | undefined>;
 
+/** The methods DCRS's API answers: PUT for the notification preferences, DELETE for a phone's push registration. */
+type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
 interface CallOptions {
   token?: string;
   query?: Query;
@@ -95,7 +98,7 @@ export function dcrsClient(options: DcrsOptions) {
     return url;
   }
 
-  async function call(method: 'GET' | 'POST', path: string, init: CallOptions = {}): Promise<Response> {
+  async function call(method: Method, path: string, init: CallOptions = {}): Promise<Response> {
     const headers: Record<string, string> = { 'X-Client-Name': CLIENT_NAME, Accept: init.accept ?? 'application/json' };
     if (init.token) headers.Authorization = `Bearer ${init.token}`;
     if (init.cookie) headers.Cookie = init.cookie;
@@ -116,7 +119,7 @@ export function dcrsClient(options: DcrsOptions) {
   }
 
   /** Calls a JSON route and answers its body, or throws DCRS's refusal as a ConnectorError. */
-  async function json<T = unknown>(method: 'GET' | 'POST', path: string, init: CallOptions = {}): Promise<T> {
+  async function json<T = unknown>(method: Method, path: string, init: CallOptions = {}): Promise<T> {
     const response = await call(method, path, init);
     if (!response.ok) throw await refusalOf(response);
     const body = await readJson(response);

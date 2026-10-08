@@ -491,3 +491,269 @@ export interface WeeklyReportSummary {
 export interface WeeklyReport extends WeeklyReportSummary {
   users: WeeklyUserSummary[];
 }
+
+// ── Notifications, tasks and the Review screen ──────────────────────────────────────────────────
+// DCRS keeps the notifications (its ledger in PostgreSQL), sends the push alerts and works out every task. The Mitra
+// server holds none of that: each route below is relayed to DCRS's /api/v1 as the signed-in person (DCRS's
+// docs/chatbot-integration.md, "Notification contract changes"), so DCRS's access levels decide what each person sees
+// and may do, and a refusal reaches the app in DCRS's own words. Routes of the Mitra server:
+//
+//   GET    /notifications?state=open|all&limit=50&before=<id>&lang=en|hi|gu  -> NotificationList
+//   POST   /notifications/read             NotificationReadRequest      -> NotificationReadResponse
+//   POST   /notifications/test                                          -> TestNotificationResponse (to the caller's own phones)
+//   GET    /notification-preferences                                    -> NotificationPreferences
+//   PUT    /notification-preferences       NotificationPreferences      -> NotificationPreferences
+//   POST   /devices                        DeviceRegistration           -> OkResponse
+//   DELETE /devices                        DeviceRemoval                -> OkResponse
+//   GET    /tasks                                                       -> Tasks (DCRS's /api/v1/today)
+//   POST   /records                        StartRecordRequest           -> StartedRecord
+//   GET    /records/:recordId                                           -> RecordView
+//   POST   /records/:recordId/changes      RecordChangeRequest          -> RecordChangeResult
+//   POST   /records/:recordId/actions      RecordActionRequest          -> RecordChangeResult
+
+export type NotificationKind =
+  | 'ready'
+  | 'needs_input'
+  | 'due'
+  | 'upcoming'
+  | 'overdue'
+  | 'verify'
+  | 'sent_back'
+  | 'boss_summary'
+  | 'escalation'
+  | 'access_changed';
+
+/** The language DCRS writes a notification's words in. */
+export type NotificationLanguage = 'en' | 'hi' | 'gu';
+
+/** One module's counts in the super admin's morning and evening summary. */
+export interface ModuleCounts {
+  module: string;
+  ready: number;
+  needsInput: number;
+  awaitingVerification: number;
+  notSubmitted: number;
+  overdue: number;
+}
+
+/** What a notification is about: ids, names and counts only (never a record's values). */
+export interface NotificationData {
+  documentId?: string;
+  formatNo?: string;
+  documentName?: string;
+  module?: string;
+  recordId?: string;
+  dueDate?: string;
+  count?: number;
+  daysLate?: number;
+  reason?: string;
+  modules?: ModuleCounts[];
+}
+
+export interface NotificationItem {
+  id: number;
+  kind: NotificationKind;
+  priority: 'high' | 'medium' | 'low';
+  /** Written by DCRS in the language asked for, never stored as text. */
+  title: string;
+  body: string;
+  data: NotificationData;
+  createdAt: string;
+  readAt: string | null;
+  /** When the record moved on, so the notification no longer asks anything of the person. */
+  resolvedAt: string | null;
+}
+
+export interface NotificationList {
+  items: NotificationItem[];
+  /** Not yet read. */
+  unread: number;
+  /** Still asking something of the person: the app's badge. */
+  open: number;
+}
+
+/** Marks some notifications read, or all of them. */
+export interface NotificationReadRequest {
+  ids?: number[];
+  all?: true;
+}
+
+export interface NotificationReadResponse {
+  unread: number;
+}
+
+/** A phone's Expo push token, so DCRS can send it alerts, in the language chosen in the app. */
+export interface DeviceRegistration {
+  token: string;
+  platform: 'android' | 'ios';
+  language: NotificationLanguage;
+  appVersion?: string;
+  deviceName?: string;
+}
+
+export interface DeviceRemoval {
+  token: string;
+}
+
+export interface OkResponse {
+  ok: true;
+}
+
+/** Which kinds of notification are pushed to the person's phones (a kind switched off still reaches the inbox). */
+export interface NotificationPreferences {
+  kinds: Partial<Record<NotificationKind, boolean>>;
+  reminders?: boolean;
+}
+
+export interface TestNotificationResponse {
+  /** How many of the person's phones the test was sent to. */
+  sent: number;
+}
+
+/** One line of the person's day, as DCRS's /api/v1/today gives it. */
+export interface TaskItem {
+  documentId: string;
+  formatNo: string;
+  document: string;
+  dueDate: string;
+  status: string | null;
+  /** null for a sheet DCRS's calendar has but nobody has started: POST /records starts it. */
+  recordId: string | null;
+  started: boolean;
+  module?: string;
+  /** Whether the person may submit it, and verify it, at their access level. */
+  canSubmit?: boolean;
+  canVerify?: boolean;
+  /** What still stops it being submitted, in DCRS's words. */
+  problems?: string[];
+  /** How many readings wait for the person, when DCRS says. */
+  count?: number;
+}
+
+export interface TaskDay {
+  date: string;
+  weekday?: string;
+  kind?: string;
+  closed?: boolean;
+  name?: string;
+  label?: string;
+}
+
+/** The person's day (DCRS's /api/v1/today): for the super admin, every module's. */
+export interface Tasks {
+  date: string;
+  day?: TaskDay;
+  tomorrow?: TaskDay;
+  weeklyOff?: { day: string; next?: string };
+  overdue: TaskItem[];
+  due: TaskItem[];
+  upcoming: TaskItem[];
+  readyToSubmit: TaskItem[];
+  needsInput: TaskItem[];
+  awaitingVerification: TaskItem[];
+  workingHours?: { hoursText?: string; todayText?: string; forYou?: string | null };
+}
+
+/** A box, a column or a field of a record's form, as DCRS describes it. */
+export interface RecordField {
+  key: string;
+  label: string;
+  type: string;
+  options?: string[];
+  required?: boolean;
+  unit?: string;
+  group?: string;
+  /** Printed on the form: never written. */
+  printed?: boolean;
+  /** Worked out from other values: never written. */
+  computed?: boolean;
+  /** Read from another document: never written here. */
+  readFrom?: string;
+  min?: number;
+  max?: number;
+  /** A list's keys, for a field that is a list. */
+  items?: string[];
+  count?: number;
+  /** A group's parts, for a field that has several. */
+  parts?: string[];
+}
+
+/** What a record's form is made of, in the keys a change names (DCRS's layout). */
+export interface RecordLayout {
+  kind: string;
+  header?: RecordField[];
+  footer?: RecordField[];
+  columns?: RecordField[];
+  rows?: { mode: string; slotKey?: string; slots?: string[]; fixed?: number; count?: number };
+  checkpoints?: { number: number; question: string; answer: string; noteAsks?: string; findingWhen?: string }[];
+  fields?: RecordField[];
+  lists?: { key: string; label: string; items: string[] }[];
+}
+
+/** A record, as DCRS's GET /api/v1/records/:id answers it. */
+export interface RecordView {
+  recordId: string;
+  documentId: string;
+  document: { id: string; formatNo: string; name: string; kind: string; module?: string; department?: { code: string; name: string } | string | null };
+  date: string;
+  status: string;
+  editable: boolean;
+  canReopen?: boolean;
+  /** What can be done to it now, such as submit, verify, send_back. */
+  actions: string[];
+  submittedBy?: string;
+  submittedAt?: string | null;
+  verifiedBy?: string;
+  sentBackBy?: string | null;
+  sentBackBecause?: string | null;
+  /** What the assistant filled before anybody opened it, and what to check. */
+  prepared: { at: string; notes: string[]; basedOn?: string | null } | null;
+  layout: RecordLayout | null;
+  inWords: { where?: string; label: string; value: string }[];
+  data: unknown;
+  history?: { at: string; by: string; action: string; note?: string }[];
+  /** What still stops a submit, in DCRS's words, when DCRS says. */
+  problems?: string[];
+  canSubmit?: boolean;
+  canVerify?: boolean;
+}
+
+/** Starts a document's record for a day (today when left out), or opens the one already started. */
+export interface StartRecordRequest {
+  documentId: string;
+  date?: string;
+}
+
+export interface StartedRecord {
+  created: boolean;
+  record: RecordView;
+}
+
+/** Values the person entered, in DCRS's patch shape (see RecordView's layout). */
+export interface RecordChangeRequest {
+  patch: Record<string, unknown>;
+  note?: string;
+}
+
+/** What the Review screen can do to a record. */
+export type ReviewAction = 'submit' | 'verify' | 'send_back' | 'resume';
+
+/**
+ * Submit, verify or send back after the person ticked "Reviewed and correct" (reviewed: true is required for these
+ * three), or resume a record that was sent back. send_back needs the reason.
+ */
+export interface RecordActionRequest {
+  action: ReviewAction;
+  reason?: string;
+  reviewed?: boolean;
+}
+
+export interface RecordChangeResult {
+  recordId: string;
+  status: string;
+  editable: boolean;
+  actions: string[];
+  changes?: { label: string; before: string; after: string }[];
+  /** What DCRS left out of the change, and why. */
+  problems?: string[];
+}

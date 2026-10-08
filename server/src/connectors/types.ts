@@ -24,6 +24,32 @@ export interface Connector {
   authenticate(username: string, password: string): Promise<ConnectorAccount>;
   /** Best-effort sign-out with the system when a session ends. */
   signOut?(credentials: unknown): Promise<void>;
+  /**
+   * What the app's own screens ask of the system as the person, outside the chat: the inbox, the tasks and the Review
+   * screen (shared/api.ts). Only a system that keeps notifications offers it (DCRS); without it those routes say so.
+   */
+  phone?: PhoneRelay;
+}
+
+export type RelayQuery = Record<string, string | number | undefined>;
+
+/**
+ * Relays the phone's screens to the system as the signed-in person. Each call answers the system's own JSON, or throws
+ * a ConnectorError in the system's words. The server keeps no notification or task logic of its own.
+ */
+export interface PhoneRelay {
+  notifications(credentials: unknown, query: RelayQuery): Promise<unknown>;
+  markRead(credentials: unknown, body: { ids?: number[]; all?: true }): Promise<unknown>;
+  testNotification(credentials: unknown): Promise<unknown>;
+  preferences(credentials: unknown): Promise<unknown>;
+  savePreferences(credentials: unknown, body: unknown): Promise<unknown>;
+  registerDevice(credentials: unknown, body: unknown): Promise<unknown>;
+  removeDevice(credentials: unknown, body: { token: string }): Promise<unknown>;
+  tasks(credentials: unknown): Promise<unknown>;
+  startRecord(credentials: unknown, body: { documentId: string; date?: string }): Promise<unknown>;
+  record(credentials: unknown, recordId: string): Promise<unknown>;
+  changeRecord(credentials: unknown, recordId: string, body: { patch: Record<string, unknown>; note?: string }): Promise<unknown>;
+  actOnRecord(credentials: unknown, recordId: string, body: { action: string; reason?: string; reviewed?: boolean }): Promise<unknown>;
 }
 
 export interface ConnectorAccount {
